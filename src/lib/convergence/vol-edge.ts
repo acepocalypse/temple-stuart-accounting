@@ -156,7 +156,7 @@ function computeZScores(
   hv30: number | null,
   hv60: number | null,
 ): MispricingTrace['z_scores'] {
-  const sector = input.ttScanner?.sector;
+  const sector = input.scanner?.sector;
   const stats = sector ? input.sectorStats?.[sector] : undefined;
 
   if (!stats?.metrics) {
@@ -203,27 +203,27 @@ function computeZScores(
 // ===== MISPRICING SUB-SCORE =====
 
 function scoreMispricing(input: ConvergenceInput): MispricingTrace {
-  const tt = input.ttScanner;
-  const iv30 = tt?.iv30 ?? null;
-  const hv30 = tt?.hv30 ?? null;
-  const hv60 = tt?.hv60 ?? null;
-  const hv90 = tt?.hv90 ?? null;
-  let ivp = tt?.ivPercentile ?? null;
-  // TastyTrade returns IVP as decimal (0.693 = 69.3%); normalize to 0-100 scale
+  const scanner = input.scanner;
+  const iv30 = scanner?.iv30 ?? null;
+  const hv30 = scanner?.hv30 ?? null;
+  const hv60 = scanner?.hv60 ?? null;
+  const hv90 = scanner?.hv90 ?? null;
+  let ivp = scanner?.ivPercentile ?? null;
+  // Some feeds return IVP as decimal (0.693 = 69.3%); normalize to 0-100 scale.
   if (ivp !== null && ivp <= 1.0) ivp = round(ivp * 100, 1);
-  const ivHvSpread = tt?.ivHvSpread ?? null;
+  const ivHvSpread = scanner?.ivHvSpread ?? null;
 
-  // VRP = IV30Â² - HV30Â² (variance risk premium)
+  // VRP = IV30Â^2 - HV30Â^2 (variance risk premium)
   let vrp: number | null = null;
   let vrpStr = 'N/A (missing IV30 or HV30)';
   if (iv30 !== null && hv30 !== null && iv30 > 0) {
     vrp = iv30 ** 2 - hv30 ** 2;
-    vrpStr = `${iv30}Â² âˆ’ ${hv30}Â² = ${round(vrp, 2)} (${vrp > 0 ? 'positive = IV overpricing RV' : 'negative = IV underpricing RV'})`;
+    vrpStr = `${iv30}Â^2 âˆ’ ${hv30}Â^2 = ${round(vrp, 2)} (${vrp > 0 ? 'positive = IV overpricing RV' : 'negative = IV underpricing RV'})`;
   }
 
   // Compute z-scores for sector-relative comparison
   const zScores = computeZScores(input, ivp, ivHvSpread, vrp, hv30, hv60);
-  const sector = tt?.sector ?? null;
+  const sector = scanner?.sector ?? null;
   const sectorEntry = sector ? input.sectorStats?.[sector] : undefined;
   const hasZScores = zScores.vrp_z !== null || zScores.ivp_z !== null ||
                      zScores.iv_hv_z !== null || zScores.hv_accel_z !== null;
@@ -272,7 +272,7 @@ function scoreMispricing(input: ConvergenceInput): MispricingTrace {
   }
 
   // --- Apply z-score transform when sector peers available (pipeline mode) ---
-  // Transform: score = 50 + clip(z Ã— 15, -50, 50)
+  // Transform: score = 50 + clip(z Ã- 15, -50, 50)
   //   z=0 â†’ 50 (sector average), z=+3.33 â†’ 100, z=-3.33 â†’ 0
   let vrpScore = vrpScoreRaw;
   let ivpScore = ivpScoreRaw;
@@ -294,13 +294,13 @@ function scoreMispricing(input: ConvergenceInput): MispricingTrace {
     }
   }
 
-  // Spec-compliant weights: 0.30Ã—VRP + 0.30Ã—IVP + 0.25Ã—IV_HV_spread + 0.15Ã—HV_accel
+  // Spec-compliant weights: 0.30Ã-VRP + 0.30Ã-IVP + 0.25Ã-IV_HV_spread + 0.15Ã-HV_accel
   const score = round(0.30 * vrpScore + 0.30 * ivpScore + 0.25 * ivHvSpreadScore + 0.15 * hvAccelScore, 1);
 
   const mode = hasZScores
     ? `z-score mode (sector: ${sector}, n=${peerCount})`
     : 'raw mode (single ticker, no sector peers)';
-  const formula = `0.30Ã—VRP(${round(vrpScore, 1)}) + 0.30Ã—IVP(${round(ivpScore, 1)}) + 0.25Ã—IV_HV(${round(ivHvSpreadScore, 1)}) + 0.15Ã—HV_accel(${round(hvAccelScore, 1)}) = ${score} [${mode}]`;
+  const formula = `0.30Ã-VRP(${round(vrpScore, 1)}) + 0.30Ã-IVP(${round(ivpScore, 1)}) + 0.25Ã-IV_HV(${round(ivHvSpreadScore, 1)}) + 0.15Ã-HV_accel(${round(hvAccelScore, 1)}) = ${score} [${mode}]`;
 
   return {
     score: round(score),
@@ -326,8 +326,8 @@ function scoreMispricing(input: ConvergenceInput): MispricingTrace {
 // ===== TERM STRUCTURE SUB-SCORE =====
 
 function scoreTermStructure(input: ConvergenceInput): TermStructureTrace {
-  const ts = input.ttScanner?.termStructure ?? [];
-  const earningsDate = input.ttScanner?.earningsDate ?? null;
+  const ts = input.scanner?.termStructure ?? [];
+  const earningsDate = input.scanner?.earningsDate ?? null;
 
   if (ts.length < 2) {
     return {
@@ -567,7 +567,7 @@ function scoreTechnicals(input: ConvergenceInput): TechnicalsTrace {
     0.25 * rsiScore + 0.25 * trendScore + 0.20 * bollingerScore + 0.15 * volumeScore + 0.15 * macdScore, 1,
   );
 
-  const formula = `0.25Ã—RSI(${round(rsiScore)}) + 0.25Ã—Trend(${round(trendScore)}) + 0.20Ã—BB(${round(bollingerScore)}) + 0.15Ã—Vol(${round(volumeScore)}) + 0.15Ã—MACD(${round(macdScore)}) = ${score}`;
+  const formula = `0.25Ã-RSI(${round(rsiScore)}) + 0.25Ã-Trend(${round(trendScore)}) + 0.20Ã-BB(${round(bollingerScore)}) + 0.15Ã-Vol(${round(volumeScore)}) + 0.15Ã-MACD(${round(macdScore)}) = ${score}`;
 
   return {
     score: round(score),
@@ -663,3 +663,4 @@ export function scoreVolEdge(input: ConvergenceInput): VolEdgeResult {
     },
   };
 }
+

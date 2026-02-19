@@ -1,4 +1,4 @@
-import type { CandleData, TTScannerData } from '@/lib/convergence/types';
+import type { CandleData, StockScannerData } from '@/lib/convergence/types';
 import type { FullScoringResult } from '@/lib/convergence/composite';
 
 export interface StockEngineConfig {
@@ -16,7 +16,7 @@ export interface StockEngineConfig {
   intradayShortlistSize: number;
 }
 
-export interface ScannerMetricExtended extends TTScannerData {
+export interface ScannerMetricExtended extends StockScannerData {
   lastPrice: number | null;
   dayVolume: number | null;
   dollarVolume: number | null;

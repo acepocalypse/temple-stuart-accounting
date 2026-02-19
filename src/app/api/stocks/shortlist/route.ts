@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getDefaultStockConfig, getShortlistRefresh, resolveUserIdFromCookie } from '@/lib/stocks/engine';
+import { getDefaultStockConfig, getShortlistRefresh } from '@/lib/stocks/engine';
 
 export const maxDuration = 300;
 
@@ -12,11 +12,6 @@ function parseNumberParam(v: string | null): number | undefined {
 
 export async function GET(request: Request) {
   try {
-    const userId = await resolveUserIdFromCookie();
-    if (!userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
     const { searchParams } = new URL(request.url);
     const refresh = searchParams.get('refresh') === 'true';
 
@@ -29,7 +24,7 @@ export async function GET(request: Request) {
       maxPerSector: parseNumberParam(searchParams.get('maxPerSector')) ?? defaults.maxPerSector,
     };
 
-    const result = await getShortlistRefresh(request, userId, refresh, configOverride);
+    const result = await getShortlistRefresh(request, 'manual-stock-user', refresh, configOverride);
     return NextResponse.json(result, {
       headers: {
         'X-Generated-At': result.generatedAt,

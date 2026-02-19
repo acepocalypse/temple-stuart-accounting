@@ -1,4 +1,4 @@
-import type { TTScannerData } from './types';
+import type { StockScannerData } from './types';
 
 // ===== TYPES =====
 
@@ -56,9 +56,9 @@ function computeMetricStats(values: (number | null | undefined)[]): SectorMetric
 
 // ===== MAIN FUNCTIONS =====
 
-export function computeSectorStats(scannerResults: TTScannerData[]): SectorStatsMap {
+export function computeSectorStats(scannerResults: StockScannerData[]): SectorStatsMap {
   // Group by sector
-  const bySector = new Map<string, TTScannerData[]>();
+  const bySector = new Map<string, StockScannerData[]>();
   for (const item of scannerResults) {
     const sector = item.sector || 'Unknown';
     if (!bySector.has(sector)) {

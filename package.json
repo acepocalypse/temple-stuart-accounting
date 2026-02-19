@@ -4,51 +4,24 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build",
+    "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "postinstall": "prisma generate"
+    "lint": "next lint"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.74.0",
-    "@auth/prisma-adapter": "^2.11.1",
-    "@prisma/client": "^6.15.0",
-    "@stripe/stripe-js": "^8.7.0",
-    "@tastytrade/api": "^6.0.1",
-    "bcryptjs": "^2.4.3",
-    "jsonwebtoken": "^9.0.2",
-    "leaflet": "^1.9.4",
-    "lucide-react": "^0.544.0",
     "next": "15.5.9",
-    "next-auth": "^4.24.13",
-    "openai": "^6.7.0",
-    "pdf-parse": "^2.4.5",
-    "plaid": "^11.0.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-leaflet": "^5.0.0",
-    "react-plaid-link": "^3.6.1",
-    "recharts": "^3.7.0",
-    "stripe": "^20.3.0",
-    "uuid": "^13.0.0",
-    "xai-sdk": "^1.0.0-alpha.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
-    "@types/jsonwebtoken": "^9.0.10",
-    "@types/leaflet": "^1.9.21",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "@types/uuid": "^10.0.0",
     "autoprefixer": "^10.4.21",
     "eslint": "^8",
     "eslint-config-next": "15.5.2",
     "postcss": "^8",
-    "prisma": "^6.15.0",
     "tailwindcss": "^3.4.18",
-    "tsx": "^4.20.6",
-    "typescript": "^5",
-    "vercel": "^48.1.4"
+    "typescript": "^5"
   }
 }

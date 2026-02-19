@@ -1,4 +1,4 @@
-// ===== RAW DATA INPUTS =====
+// Core input primitives for deterministic stock scoring.
 
 export interface CandleData {
   time: number;
@@ -10,7 +10,7 @@ export interface CandleData {
   volume: number;
 }
 
-export interface TTScannerData {
+export interface StockScannerData {
   symbol: string;
   ivRank: number;
   ivPercentile: number;
@@ -83,8 +83,6 @@ export interface FredMacroData {
   sofr: number | null;
 }
 
-// ===== ANNUAL FINANCIALS (for Piotroski YoY signals) =====
-
 export interface AnnualFinancialPeriod {
   grossProfit: number | null;
   revenue: number | null;
@@ -104,57 +102,9 @@ export interface AnnualFinancials {
   priorYear: AnnualFinancialPeriod;
 }
 
-// ===== OPTIONS FLOW DATA (from Finnhub option chain) =====
-
-export interface OptionsFlowData {
-  put_call_ratio: number | null;
-  volume_bias: number | null;
-  unusual_activity_ratio: number | null;
-  total_call_volume: number;
-  total_put_volume: number;
-  total_call_oi: number;
-  total_put_oi: number;
-  strikes_analyzed: number;
-  high_activity_strikes: number;
-  expirations_analyzed: number;
-}
-
-// ===== NEWS SENTIMENT DATA (from Finnhub company-news + keyword matching) =====
-
-export interface NewsHeadlineEntry {
-  datetime: number;
-  headline: string;
-  source: string;
-  url: string;
-  sentiment_keywords: string[];
-  sentiment: 'bullish' | 'bearish' | 'neutral';
-}
-
-export interface NewsSentimentPeriod {
-  bullish_matches: number;
-  bearish_matches: number;
-  neutral: number;
-  score: number;
-}
-
-export interface NewsSentimentData {
-  total_articles_30d: number;
-  articles_7d: number;
-  articles_8_30d: number;
-  buzz_ratio: number | null;
-  sentiment_7d: NewsSentimentPeriod;
-  sentiment_8_30d: NewsSentimentPeriod;
-  sentiment_momentum: number;
-  source_distribution: Record<string, number>;
-  tier1_ratio: number;
-  headlines: NewsHeadlineEntry[];
-}
-
-// ===== COMBINED RAW INPUT =====
-
 export interface ConvergenceInput {
   symbol: string;
-  ttScanner: TTScannerData | null;
+  scanner: StockScannerData | null;
   candles: CandleData[];
   finnhubFundamentals: FinnhubFundamentals | null;
   finnhubRecommendations: FinnhubRecommendation[];
@@ -162,12 +112,8 @@ export interface ConvergenceInput {
   finnhubEarnings: FinnhubEarnings[];
   fredMacro: FredMacroData;
   annualFinancials: AnnualFinancials | null;
-  optionsFlow: OptionsFlowData | null;
-  newsSentiment: NewsSentimentData | null;
   sectorStats?: Record<string, { metrics: Record<string, { mean: number; std: number }> }>;
 }
-
-// ===== SCORING TRACES =====
 
 export interface SubScoreTrace {
   score: number;
@@ -177,7 +123,7 @@ export interface SubScoreTrace {
   notes: string;
 }
 
-// -- Vol Edge --
+// Vol-Edge
 
 export interface MispricingTrace extends SubScoreTrace {
   z_scores: {
@@ -237,7 +183,7 @@ export interface VolEdgeResult {
   };
 }
 
-// -- Quality Gate --
+// Quality
 
 export interface SafetyTrace extends SubScoreTrace {
   sub_scores: {
@@ -286,22 +232,6 @@ export interface ProfitabilityTrace extends SubScoreTrace {
   };
 }
 
-export interface EarningsQualityTrace extends SubScoreTrace {
-  sub_scores: {
-    surprise_consistency: number;
-    days_to_earnings_score: number;
-    beat_rate: number;
-  };
-  earnings_detail: {
-    total_quarters: number;
-    beats: number;
-    misses: number;
-    in_line: number;
-    avg_surprise_pct: number | null;
-    streak: string;
-  };
-}
-
 export interface GrowthTrace extends SubScoreTrace {
   sub_scores: {
     revenue_growth_score: number;
@@ -329,14 +259,7 @@ export interface QualityGateResult {
   };
 }
 
-// -- Regime --
-
-export interface StrategyRegimeScore {
-  strategy: string;
-  raw_score: number;
-  vix_adjustment: number;
-  final_score: number;
-}
+// Regime
 
 export interface RegimeResult {
   score: number;
@@ -381,9 +304,9 @@ export interface RegimeResult {
     vix_overlay: {
       vix: number | null;
       adjustment_type: string;
+      adjustment: number;
+      base_regime_score: number;
     };
-    strategy_scores: StrategyRegimeScore[];
-    best_strategy: string;
     spy_correlation_modifier: {
       corr_spy: number | null;
       multiplier: number;
@@ -395,7 +318,7 @@ export interface RegimeResult {
   };
 }
 
-// -- Info Edge --
+// Info-Edge
 
 export interface AnalystConsensusTrace extends SubScoreTrace {
   sub_scores: {
@@ -441,59 +364,16 @@ export interface EarningsMomentumTrace extends SubScoreTrace {
   };
 }
 
-export interface FlowSignalTrace {
-  score: number;
-  weight: number;
-  inputs: Record<string, number | string | boolean | null>;
-  formula: string;
-  notes: string;
-  sub_scores: {
-    put_call_ratio_score: number;
-    unusual_activity_score: number;
-    volume_bias_score: number;
-  };
-  flow_detail: {
-    data_available: boolean;
-    note: string;
-  };
-}
-
-export interface NewsSentimentTrace {
-  score: number;
-  weight: number;
-  inputs: Record<string, number | string | boolean | null>;
-  formula: string;
-  notes: string;
-  sub_scores: {
-    buzz_score: number;
-    sentiment_score: number;
-    source_quality_score: number;
-  };
-  news_detail: {
-    data_available: boolean;
-    total_articles_30d: number;
-    articles_7d: number;
-    buzz_ratio: number | null;
-    sentiment_7d_score: number | null;
-    sentiment_momentum: number | null;
-    tier1_ratio: number | null;
-    source_distribution: Record<string, number>;
-    headlines: NewsHeadlineEntry[];
-  };
-}
-
 export interface InfoEdgeResult {
   score: number;
   breakdown: {
     analyst_consensus: AnalystConsensusTrace;
     insider_activity: InsiderActivityTrace;
     earnings_momentum: EarningsMomentumTrace;
-    flow_signal: FlowSignalTrace;
-    news_sentiment: NewsSentimentTrace;
   };
 }
 
-// -- Composite --
+// Composite
 
 export interface CompositeResult {
   score: number;
@@ -508,139 +388,4 @@ export interface CompositeResult {
     info_edge: number;
   };
   categories_above_50: number;
-}
-
-// -- Strategy Suggestion --
-
-export interface TradeCardLeg {
-  type: string;
-  side: string;
-  strike: number;
-  price: number;
-}
-
-export interface TradeCardData {
-  name: string;
-  legs: TradeCardLeg[];
-  expiration: string;
-  dte: number;
-  netCredit: number | null;
-  netDebit: number | null;
-  maxProfit: number | null;
-  maxLoss: number | null;
-  breakevens: number[];
-  pop: number | null;
-  riskReward: number | null;
-  ev: number;
-}
-
-export interface StrategySuggestion {
-  direction: string;
-  regime_preferred: string;
-  vol_edge_confirms: string;
-  suggested_strategy: string;
-  suggested_dte: number;
-  note: string;
-  trade_cards?: TradeCardData[];
-  full_trade_cards?: TradeCard[];
-}
-
-// -- Trade Card (unified output: setup + rationale + key stats) --
-
-export interface TradeCardSetup {
-  strategy_name: string;
-  legs: { type: string; side: string; strike: number; price: number }[];
-  expiration_date: string;
-  dte: number;
-  net_credit: number | null;
-  net_debit: number | null;
-  max_profit: number | null;
-  max_loss: number | null;
-  breakevens: number[];
-  probability_of_profit: number | null;
-  hv_pop: number | null;
-  risk_reward_ratio: number | null;
-  greeks: {
-    delta: number;
-    gamma: number;
-    theta: number;
-    vega: number;
-    theta_per_day: number;
-  };
-  ev: number;
-  ev_per_risk: number;
-  has_wide_spread: boolean;
-  is_unlimited_risk: boolean;
-}
-
-export interface TradeCardWhy {
-  composite_score: number;
-  letter_grade: string;
-  direction: string;
-  convergence_gate: string;
-  category_scores: {
-    vol_edge: number;
-    quality: number;
-    regime: number;
-    info_edge: number;
-  };
-  plain_english_signals: string[];
-  regime_context: string;
-  risk_flags: string[];
-}
-
-export interface TradeCardKeyStats {
-  iv_rank: number | null;
-  iv_percentile: number | null;
-  iv30: number | null;
-  hv30: number | null;
-  iv_hv_spread: number | null;
-  earnings_date: string | null;
-  days_to_earnings: number | null;
-  market_cap: number | null;
-  sector: string | null;
-  beta: number | null;
-  spy_correlation: number | null;
-  pe_ratio: number | null;
-  dividend_yield: number | null;
-  liquidity_rating: number | null;
-  lendability: string | null;
-  buzz_ratio: number | null;
-  sentiment_momentum: number | null;
-  analyst_consensus: string | null;
-}
-
-export interface TradeCard {
-  symbol: string;
-  generated_at: string;
-  label: string;
-  setup: TradeCardSetup;
-  why: TradeCardWhy;
-  key_stats: TradeCardKeyStats;
-}
-
-// -- Full Pipeline Response --
-
-export interface ConvergenceResponse {
-  symbol: string;
-  timestamp: string;
-  pipeline_runtime_ms: number;
-  raw_data: {
-    tastytrade_scanner: TTScannerData | null;
-    tastytrade_candles: { count: number; oldest: string | null; newest: string | null; sample: CandleData | null };
-    finnhub_fundamentals: { field_count: number; sample_fields: Record<string, number | string | null> } | null;
-    finnhub_recommendations: { latest: FinnhubRecommendation | null; history_count: number };
-    finnhub_insider_sentiment: { latest_mspr: number | null; months_available: number };
-    finnhub_earnings: { latest: FinnhubEarnings | null; quarters_available: number };
-    fred_macro: FredMacroData;
-  };
-  scores: {
-    vol_edge: VolEdgeResult;
-    quality: QualityGateResult;
-    regime: RegimeResult;
-    info_edge: InfoEdgeResult;
-    composite: CompositeResult;
-  };
-  strategy_suggestion: StrategySuggestion;
-  data_gaps: string[];
 }

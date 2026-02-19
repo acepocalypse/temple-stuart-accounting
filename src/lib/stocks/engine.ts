@@ -1,6 +1,4 @@
 
-import { cookies } from 'next/headers';
-import { prisma } from '@/lib/prisma';
 import { computeSectorStats } from '@/lib/convergence/sector-stats';
 import { scoreAll } from '@/lib/convergence/composite';
 import type {
@@ -11,7 +9,7 @@ import type {
   FinnhubInsiderSentiment,
   FinnhubRecommendation,
   FredMacroData,
-  TTScannerData,
+  StockScannerData,
 } from '@/lib/convergence/types';
 import type {
   CachedDailyScan,
@@ -1183,16 +1181,8 @@ function buildCard(
   };
 }
 
-async function getOpenSymbols(userId: string): Promise<string[]> {
-  const lots = await prisma.stock_lots.findMany({
-    where: {
-      user_id: userId,
-      remaining_quantity: { gt: 0 },
-      status: { in: ['OPEN', 'PARTIAL'] },
-    },
-    select: { symbol: true },
-  });
-  return Array.from(new Set(lots.map((l) => l.symbol.toUpperCase())));
+async function getOpenSymbols(_userId: string): Promise<string[]> {
+  return [];
 }
 
 function selectCardsWithLimits(
@@ -1246,7 +1236,7 @@ function selectCardsWithLimits(
   return { selected, watchlist, availableSlots };
 }
 
-function toTTScannerData(row: ScannerMetricExtended): TTScannerData {
+function toStockScannerData(row: ScannerMetricExtended): StockScannerData {
   return {
     symbol: row.symbol,
     ivRank: row.ivRank,
@@ -1418,7 +1408,7 @@ async function runFullDailyScan(
     };
   });
 
-  const sectorStats = computeSectorStats(rankedForScoring.map(toTTScannerData));
+  const sectorStats = computeSectorStats(rankedForScoring.map(toStockScannerData));
 
   const scorerInputs: CachedDailyScan['scorerInputs'] = [];
   for (const symbol of scoringSymbols) {
@@ -1429,7 +1419,7 @@ async function runFullDailyScan(
 
     const input: ConvergenceInput = {
       symbol,
-      ttScanner: toTTScannerData(scanner),
+      scanner: toStockScannerData(scanner),
       candles: daily,
       finnhubFundamentals: fh.fundamentals,
       finnhubRecommendations: fh.recommendations,
@@ -1437,8 +1427,6 @@ async function runFullDailyScan(
       finnhubEarnings: fh.earnings,
       fredMacro: fred.data,
       annualFinancials: null,
-      optionsFlow: null,
-      newsSentiment: null,
       sectorStats,
     };
     const scoring = scoreAll(input);
@@ -1625,14 +1613,4 @@ export async function getShortlistRefresh(
   return refreshed;
 }
 
-export async function resolveUserIdFromCookie(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const userEmail = cookieStore.get('userEmail')?.value;
-  if (!userEmail) return null;
-  const user = await prisma.users.findFirst({
-    where: { email: { equals: userEmail, mode: 'insensitive' } },
-    select: { id: true },
-  });
-  return user?.id || null;
-}
 

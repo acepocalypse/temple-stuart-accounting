@@ -13,57 +13,47 @@ function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x / 10));
 }
 
-// ===== STEP A — NORMALIZE MACRO INDICATORS TO 0-100 =====
+// Step A: Normalize macro indicators to 0-100.
 
-// GDP growth (%): Range -2% to 6%. Higher = stronger economy.
 function normalizeGdp(v: number | null): number {
   if (v === null) return 50;
   return round(clamp((v + 2) * (100 / 8), 0, 100), 1);
 }
 
-// Unemployment (%): Range 3% to 10%. INVERTED — lower = better.
 function normalizeUnemployment(v: number | null): number {
   if (v === null) return 50;
   return round(clamp((10 - v) * (100 / 7), 0, 100), 1);
 }
 
-// Non-farm payrolls (thousands/month): Range -200K to 500K. Higher = better.
 function normalizeNfp(v: number | null): number {
   if (v === null) return 50;
   return round(clamp((v + 200) * (100 / 700), 0, 100), 1);
 }
 
-// Consumer Confidence Index: Range 60 to 140. Higher = better.
 function normalizeConsumerConfidence(v: number | null): number {
   if (v === null) return 50;
   return round(clamp((v - 60) * (100 / 80), 0, 100), 1);
 }
 
-// CPI YoY (%): Range 0% to 10%. Higher = more inflation.
 function normalizeCpiYoy(v: number | null): number {
   if (v === null) return 50;
   return round(clamp(v * 10, 0, 100), 1);
 }
 
-// CPI MoM (%): Range -0.5% to 1.0%. Higher = more inflation.
 function normalizeCpiMom(v: number | null): number {
   if (v === null) return 50;
   return round(clamp((v + 0.5) * (100 / 1.5), 0, 100), 1);
 }
 
-// Fed Funds Rate (%): Range 0% to 8%. Higher = tighter / more inflationary signal.
 function normalizeFedFunds(v: number | null): number {
   if (v === null) return 50;
   return round(clamp(v * (100 / 8), 0, 100), 1);
 }
 
-// 10Y Treasury Yield (%): Range 0% to 8%. Higher = more inflation signal.
 function normalizeTreasury10y(v: number | null): number {
   if (v === null) return 50;
   return round(clamp(v * (100 / 8), 0, 100), 1);
 }
-
-// ===== STEP A — COMPOSITE GROWTH & INFLATION SIGNALS =====
 
 interface SignalResult {
   score: number;
@@ -78,7 +68,10 @@ function computeGrowthSignal(input: ConvergenceInput): SignalResult {
   const ccScore = normalizeConsumerConfidence(m.consumerConfidence);
 
   const score = round(
-    0.30 * gdpScore + 0.25 * unempScore + 0.25 * nfpScore + 0.20 * ccScore,
+    0.3 * gdpScore +
+      0.25 * unempScore +
+      0.25 * nfpScore +
+      0.2 * ccScore,
     1,
   );
 
@@ -101,7 +94,10 @@ function computeInflationSignal(input: ConvergenceInput): SignalResult {
   const t10yScore = normalizeTreasury10y(m.treasury10y);
 
   const score = round(
-    0.40 * cpiYoyScore + 0.30 * cpiMomScore + 0.15 * fedFundsScore + 0.15 * t10yScore,
+    0.4 * cpiYoyScore +
+      0.3 * cpiMomScore +
+      0.15 * fedFundsScore +
+      0.15 * t10yScore,
     1,
   );
 
@@ -116,10 +112,13 @@ function computeInflationSignal(input: ConvergenceInput): SignalResult {
   };
 }
 
-// ===== STEP B — REGIME CLASSIFICATION (SIGMOID) =====
-
 interface RegimeClassification {
-  probabilities: { goldilocks: number; reflation: number; stagflation: number; deflation: number };
+  probabilities: {
+    goldilocks: number;
+    reflation: number;
+    stagflation: number;
+    deflation: number;
+  };
   dominant: string;
 }
 
@@ -138,7 +137,6 @@ function classifyRegime(growth: number, inflation: number): RegimeClassification
     deflation: round(rawDefl / total, 4),
   };
 
-  // Pick dominant regime (highest probability)
   const entries = Object.entries(probabilities) as [string, number][];
   entries.sort((a, b) => b[1] - a[1]);
   const dominant = entries[0][0].toUpperCase();
@@ -146,140 +144,57 @@ function classifyRegime(growth: number, inflation: number): RegimeClassification
   return { probabilities, dominant };
 }
 
-// ===== STEP C — STRATEGY-REGIME SCORING MATRIX =====
-
-const STRATEGIES = [
-  'Iron Condor',
-  'Short Put Spread',
-  'Short Call Spread',
-  'Long Call Spread',
-  'Long Put Spread',
-  'Short Straddle',
-  'Short Strangle',
-  'Covered Call',
-  'Cash Secured Put',
-  'Calendar Spread',
-] as const;
-
-type Strategy = (typeof STRATEGIES)[number];
-
-// [Goldilocks, Reflation, Stagflation, Deflation]
-const STRATEGY_REGIME_MATRIX: Record<Strategy, [number, number, number, number]> = {
-  'Iron Condor':       [90, 60, 30, 70],
-  'Short Put Spread':  [85, 70, 25, 50],
-  'Short Call Spread': [40, 30, 75, 85],
-  'Long Call Spread':  [85, 75, 20, 35],
-  'Long Put Spread':   [30, 25, 80, 75],
-  'Short Straddle':    [85, 55, 25, 65],
-  'Short Strangle':    [90, 60, 30, 70],
-  'Covered Call':      [70, 60, 50, 60],
-  'Cash Secured Put':  [80, 65, 30, 45],
-  'Calendar Spread':   [75, 65, 45, 55],
-};
-
-// ===== STEP D — VIX OVERLAY CLASSIFICATION =====
-
-const SHORT_VOL_STRATEGIES: ReadonlySet<string> = new Set([
-  'Iron Condor', 'Short Put Spread', 'Short Call Spread',
-  'Short Straddle', 'Short Strangle', 'Covered Call', 'Cash Secured Put',
-]);
-
-const LONG_VOL_STRATEGIES: ReadonlySet<string> = new Set([
-  'Long Call Spread', 'Long Put Spread', 'Calendar Spread',
-]);
-
-interface StrategyScoreResult {
-  strategy: string;
-  raw_score: number;
-  vix_adjustment: number;
-  final_score: number;
+function computeBaseRegimeScore(probabilities: {
+  goldilocks: number;
+  reflation: number;
+  stagflation: number;
+  deflation: number;
+}): number {
+  // Stock-bias baseline:
+  // Goldilocks/Reflation support long momentum and stronger risk appetite.
+  // Stagflation/Deflation lower expected trend quality.
+  return round(
+    probabilities.goldilocks * 82 +
+      probabilities.reflation * 70 +
+      probabilities.stagflation * 42 +
+      probabilities.deflation * 35,
+    1,
+  );
 }
 
-function scoreStrategies(
-  probabilities: { goldilocks: number; reflation: number; stagflation: number; deflation: number },
-  vix: number | null,
-): { scores: StrategyScoreResult[]; adjustmentType: string } {
-  // VIX overlay adjustments
-  let adjustmentType = 'NEUTRAL';
-  let shortVolAdj = 0;
-  let longVolAdj = 0;
-
-  if (vix !== null) {
-    if (vix > 30) {
-      adjustmentType = 'HIGH_FEAR';
-      shortVolAdj = 10;
-      longVolAdj = -5;
-    } else if (vix < 15) {
-      adjustmentType = 'COMPLACENT';
-      shortVolAdj = -5;
-      longVolAdj = 5;
-    }
-  }
-
-  const scores: StrategyScoreResult[] = STRATEGIES.map((strategy) => {
-    const m = STRATEGY_REGIME_MATRIX[strategy];
-    const rawScore = round(
-      probabilities.goldilocks * m[0] +
-      probabilities.reflation * m[1] +
-      probabilities.stagflation * m[2] +
-      probabilities.deflation * m[3],
-      1,
-    );
-
-    let adj = 0;
-    if (SHORT_VOL_STRATEGIES.has(strategy)) adj = shortVolAdj;
-    else if (LONG_VOL_STRATEGIES.has(strategy)) adj = longVolAdj;
-
-    return {
-      strategy,
-      raw_score: rawScore,
-      vix_adjustment: adj,
-      final_score: clamp(round(rawScore + adj, 1), 0, 100),
-    };
-  });
-
-  // Sort descending by final_score
-  scores.sort((a, b) => b.final_score - a.final_score);
-
-  return { scores, adjustmentType };
+function vixOverlay(vix: number | null): { type: string; adjustment: number } {
+  if (vix === null) return { type: 'UNKNOWN', adjustment: 0 };
+  if (vix > 30) return { type: 'HIGH_FEAR', adjustment: -10 };
+  if (vix < 15) return { type: 'COMPLACENT', adjustment: 5 };
+  return { type: 'NEUTRAL', adjustment: 0 };
 }
-
-// ===== MAIN REGIME SCORER =====
 
 export function scoreRegime(input: ConvergenceInput): RegimeResult {
   const macro = input.fredMacro;
 
-  // Step A: Growth & Inflation signals
   const growth = computeGrowthSignal(input);
   const inflation = computeInflationSignal(input);
 
-  // Step B: Regime classification
   const { probabilities, dominant } = classifyRegime(growth.score, inflation.score);
 
-  // Steps C + D: Strategy scoring with VIX overlay
-  const { scores: strategyScores, adjustmentType } = scoreStrategies(probabilities, macro.vix);
+  const baseScore = computeBaseRegimeScore(probabilities);
+  const overlay = vixOverlay(macro.vix);
+  const vixAdjusted = clamp(round(baseScore + overlay.adjustment, 1), 0, 100);
 
-  // Step E: Best strategy's final_score is the base regime score
-  const best = strategyScores[0];
-  const baseScore = best.final_score;
-
-  // Step F: SPY correlation modifier — scales regime influence per-ticker
-  // corrSpy = 1.0 → multiplier = 1.0 (full regime signal)
-  // corrSpy = 0.5 → multiplier = 0.75 (dampened)
-  // corrSpy = 0.0 → multiplier = 0.5 (regime halved toward neutral)
-  const corrSpy = input.ttScanner?.corrSpy ?? null;
+  // Scale macro impact by SPY correlation.
+  const corrSpy = input.scanner?.corrSpy ?? null;
   let score: number;
   let multiplier: number;
   let modifierNote: string;
 
   if (corrSpy != null) {
     multiplier = round(0.5 + 0.5 * corrSpy, 4);
-    score = round(baseScore * multiplier, 1);
-    modifierNote = `corrSpy=${corrSpy} → multiplier=${multiplier} → ${baseScore} * ${multiplier} = ${score}`;
+    score = round(vixAdjusted * multiplier, 1);
+    modifierNote = `corrSpy=${corrSpy} -> multiplier=${multiplier} -> ${vixAdjusted} * ${multiplier} = ${score}`;
   } else {
-    multiplier = 1.0;
-    score = baseScore;
-    modifierNote = 'spy_correlation: not_available — using base regime score unmodified';
+    multiplier = 1;
+    score = vixAdjusted;
+    modifierNote = 'spy_correlation unavailable -> using vix-adjusted regime score';
   }
 
   return {
@@ -319,16 +234,16 @@ export function scoreRegime(input: ConvergenceInput): RegimeResult {
       dominant_regime: dominant,
       vix_overlay: {
         vix: macro.vix,
-        adjustment_type: adjustmentType,
+        adjustment_type: overlay.type,
+        adjustment: overlay.adjustment,
+        base_regime_score: baseScore,
       },
-      strategy_scores: strategyScores,
-      best_strategy: best.strategy,
       spy_correlation_modifier: {
         corr_spy: corrSpy,
         multiplier,
-        base_regime_score: baseScore,
+        base_regime_score: vixAdjusted,
         adjusted_regime_score: score,
-        formula: 'adjusted_regime = base_regime * (0.5 + 0.5 * corrSpy)',
+        formula: 'adjusted_regime = vix_adjusted_regime * (0.5 + 0.5 * corrSpy)',
         note: modifierNote,
       },
     },

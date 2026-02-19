@@ -19,20 +19,20 @@ function round(v: number, decimals = 2): number {
 // ===== SAFETY SUB-SCORE (40%) =====
 
 function scoreSafety(input: ConvergenceInput): SafetyTrace {
-  const tt = input.ttScanner;
+  const scanner = input.scanner;
   const candles = input.candles;
   const metric = input.finnhubFundamentals?.metric ?? {};
 
   // --- Liquidity rating (15%) ---
-  const liqRating = tt?.liquidityRating ?? null;
+  const liqRating = scanner?.liquidityRating ?? null;
   let liquidityRatingScore = 50;
   if (liqRating !== null) {
-    // TT uses ~1-5 scale. Map: 5->95, 4->80, 3->60, 2->40, 1->20
+    // Scanner uses ~1-5 scale. Map: 5->95, 4->80, 3->60, 2->40, 1->20
     liquidityRatingScore = clamp(liqRating * 20 - 5, 0, 100);
   }
 
   // --- Market cap (15%) ---
-  const marketCap = tt?.marketCap ?? null;
+  const marketCap = scanner?.marketCap ?? null;
   let marketCapScore = 50;
   if (marketCap !== null) {
     if (marketCap > 200_000_000_000) marketCapScore = 90;
@@ -56,7 +56,7 @@ function scoreSafety(input: ConvergenceInput): SafetyTrace {
   }
 
   // --- Lendability (10%) ---
-  const lendability = tt?.lendability ?? null;
+  const lendability = scanner?.lendability ?? null;
   let lendabilityScore = 60; // Default: assume easy to borrow
   if (lendability !== null) {
     const lend = lendability.toLowerCase();
@@ -66,7 +66,7 @@ function scoreSafety(input: ConvergenceInput): SafetyTrace {
   }
 
   // --- Beta (20%) ---
-  const beta = tt?.beta ?? (typeof metric['beta'] === 'number' ? metric['beta'] as number : null);
+  const beta = scanner?.beta ?? (typeof metric['beta'] === 'number' ? metric['beta'] as number : null);
   let betaScore = 50;
   if (beta !== null) {
     if (beta < 0.8) betaScore = 90;
@@ -210,7 +210,7 @@ function scoreSafety(input: ConvergenceInput): SafetyTrace {
       market_cap: marketCap,
       avg_volume_20d: avgVol20d,
       lendability: lendability,
-      borrow_rate: tt?.borrowRate ?? null,
+      borrow_rate: scanner?.borrowRate ?? null,
       beta: beta,
       debt_to_equity: debtToEquity,
     },
@@ -245,10 +245,10 @@ function scoreSafety(input: ConvergenceInput): SafetyTrace {
 // ===== PROFITABILITY SUB-SCORE (30%) =====
 
 function scoreProfitability(input: ConvergenceInput): ProfitabilityTrace {
-  const tt = input.ttScanner;
+  const scanner = input.scanner;
   const metric = input.finnhubFundamentals?.metric ?? {};
   const earnings = input.finnhubEarnings;
-  const daysTillEarnings = tt?.daysTillEarnings ?? null;
+  const daysTillEarnings = scanner?.daysTillEarnings ?? null;
 
   // --- Gross margin (15%) ---
   const grossMargin = typeof metric['grossMarginTTM'] === 'number' ? metric['grossMarginTTM'] as number : null;
@@ -286,7 +286,7 @@ function scoreProfitability(input: ConvergenceInput): ProfitabilityTrace {
   }
 
   // --- P/E ratio (15%) ---
-  const pe = tt?.peRatio ?? (typeof metric['peNormalizedAnnual'] === 'number' ? metric['peNormalizedAnnual'] : null);
+  const pe = scanner?.peRatio ?? (typeof metric['peNormalizedAnnual'] === 'number' ? metric['peNormalizedAnnual'] : null);
   let peScore = 50;
   if (pe !== null && typeof pe === 'number') {
     if (pe < 0) peScore = 20;           // Negative earnings
@@ -600,3 +600,4 @@ export function scoreQualityGate(input: ConvergenceInput): QualityGateResult {
     },
   };
 }
+
