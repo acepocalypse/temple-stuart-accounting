@@ -61,7 +61,23 @@ export const SP500_SYMBOLS: string[] = [
 
 ];
 
+// Symbols known to return persistent 404s on the current Yahoo chart feed.
+// Keep excluded so scan diagnostics stay clean and runtime is not wasted.
+export const EXCLUDED_SYMBOLS: string[] = [
+  'ANSS',
+  'FBHS',
+  'FI',
+  'FLT',
+  'K',
+  'PARA',
+  'WBA',
+  'WRK',
+  'SQ',
+];
+
+const EXCLUDED = new Set(EXCLUDED_SYMBOLS.map((s) => s.toUpperCase()));
+
 export const SEED_SYMBOLS: string[] = Array.from(
   new Set([...SP500_SYMBOLS, ...POPULAR_SYMBOLS].map((s) => s.toUpperCase()))
-);
+).filter((s) => !EXCLUDED.has(s));
 

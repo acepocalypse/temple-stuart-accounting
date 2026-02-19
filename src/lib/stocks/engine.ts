@@ -117,6 +117,10 @@ const shortlistCache = new Map<string, { generatedAtMs: number; result: Shortlis
 const profileCache = new Map<string, { fetchedAtMs: number; profile: FinnhubProfile }>();
 let fredCache: { fetchedAtMs: number; data: FredMacroData } | null = null;
 
+function isExpectedUnavailableSymbolError(errorText: string): boolean {
+  return /HTTP 404/i.test(errorText);
+}
+
 function cacheKey(userId: string): string {
   return `stocks_manual_${userId}`;
 }
@@ -548,7 +552,9 @@ async function fetchDailyUniverseData(
 
   for (const result of fetched) {
     if (result.error) {
-      errors.push(result.error);
+      if (!isExpectedUnavailableSymbolError(result.error)) {
+        errors.push(result.error);
+      }
       continue;
     }
     const symbol = result.symbol.toUpperCase();
