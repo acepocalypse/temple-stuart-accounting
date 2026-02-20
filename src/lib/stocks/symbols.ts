@@ -77,7 +77,109 @@ export const EXCLUDED_SYMBOLS: string[] = [
 
 const EXCLUDED = new Set(EXCLUDED_SYMBOLS.map((s) => s.toUpperCase()));
 
-export const SEED_SYMBOLS: string[] = Array.from(
-  new Set([...SP500_SYMBOLS, ...POPULAR_SYMBOLS].map((s) => s.toUpperCase()))
-).filter((s) => !EXCLUDED.has(s));
+const BASE_SEED_SYMBOLS: string[] = Array.from(
+  new Set([...SP500_SYMBOLS, ...POPULAR_SYMBOLS].map((s) => s.toUpperCase())),
+);
 
+export const ETF_EXCLUSION_SYMBOLS: string[] = [
+  'SPY',
+  'QQQ',
+  'IWM',
+  'DIA',
+  'VTI',
+  'VOO',
+  'XLF',
+  'XLK',
+  'XLE',
+  'XLV',
+  'XLI',
+  'XLY',
+  'XLP',
+  'XLB',
+  'XLU',
+  'XLRE',
+  'XLC',
+];
+
+const ETF_EXCLUSIONS = new Set(ETF_EXCLUSION_SYMBOLS.map((s) => s.toUpperCase()));
+
+export const UNIVERSE_BACKFILL_SYMBOLS: string[] = [
+  'ACHR',
+  'AFRM',
+  'AI',
+  'ALAB',
+  'ASAN',
+  'BABA',
+  'BIDU',
+  'BILI',
+  'BROS',
+  'BYND',
+  'CART',
+  'CHWY',
+  'DLO',
+  'DOCN',
+  'ESTC',
+  'ETSY',
+  'EXAS',
+  'FIVE',
+  'FSLY',
+  'FTCH',
+  'FUBO',
+  'GME',
+  'GRAB',
+  'HIMS',
+  'HOOD',
+  'IONQ',
+  'JOBY',
+  'LI',
+  'LMND',
+  'LULU',
+  'MDB',
+  'MELI',
+  'OPEN',
+  'PINS',
+  'RBLX',
+  'RDDT',
+  'RIOT',
+  'RKLB',
+  'ROKU',
+  'S',
+  'SOUN',
+  'U',
+  'UPST',
+  'W',
+  'WIX',
+  'WOLF',
+  'XPEV',
+  'YETI',
+  'ZM',
+  'ZS',
+];
+
+export function buildSeedUniverse(
+  limit: number,
+  options?: {
+    excludeEtfs?: boolean;
+  },
+): string[] {
+  const excludeEtfs = options?.excludeEtfs === true;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const candidates = [...BASE_SEED_SYMBOLS, ...UNIVERSE_BACKFILL_SYMBOLS];
+
+  for (const raw of candidates) {
+    const symbol = raw.toUpperCase();
+    if (seen.has(symbol)) continue;
+    seen.add(symbol);
+    if (EXCLUDED.has(symbol)) continue;
+    if (excludeEtfs && ETF_EXCLUSIONS.has(symbol)) continue;
+    out.push(symbol);
+    if (out.length >= limit) break;
+  }
+
+  return out;
+}
+
+export const SEED_SYMBOLS: string[] = buildSeedUniverse(Number.MAX_SAFE_INTEGER, {
+  excludeEtfs: false,
+});

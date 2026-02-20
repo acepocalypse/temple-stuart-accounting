@@ -107,7 +107,11 @@ export async function fetchEarnings(symbol: string): Promise<{
       freshness: null,
     };
   }
-  const url = `${FINNHUB_BASE}/calendar/earnings?symbol=${symbol}&token=${token}`;
+  const today = new Date();
+  const future = new Date(today.getTime() + 90 * 86400000);
+  const from = today.toISOString().slice(0, 10);
+  const to = future.toISOString().slice(0, 10);
+  const url = `${FINNHUB_BASE}/calendar/earnings?from=${from}&to=${to}&token=${token}`;
   const response = await fetchCachedJson({
     provider: 'finnhub',
     key: `earnings:${symbol}`,
@@ -123,7 +127,11 @@ export async function fetchEarnings(symbol: string): Promise<{
   }
   const payload = response.data as Record<string, unknown>;
   const rows = (payload.earningsCalendar || payload.earnings || []) as Record<string, unknown>[];
-  const first = rows[0];
+  const symbolRows = rows.filter(
+    (row) => String(row.symbol || '').toUpperCase() === symbol.toUpperCase(),
+  );
+  symbolRows.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+  const first = symbolRows[0];
   const date = first ? String(first.date || '') : '';
   if (!date) {
     return {
@@ -132,8 +140,7 @@ export async function fetchEarnings(symbol: string): Promise<{
       freshness: new Date().toISOString(),
     };
   }
-  const today = new Date().toISOString().slice(0, 10);
-  const tradingDays = tradingDaysBetween(today, date);
+  const tradingDays = tradingDaysBetween(from, date);
   const inBlackout =
     tradingDays === null ? true : tradingDays >= -2 && tradingDays <= 1;
   return {

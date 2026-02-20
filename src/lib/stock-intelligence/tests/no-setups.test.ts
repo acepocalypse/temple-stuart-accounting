@@ -82,3 +82,10 @@ test('no setups condition returns empty shortlist with reason', async () => {
   assert.equal(result.scan_debug.valid_daily_count, 0);
   assert.equal(result.scan_debug.valid_15m_count, 0);
 });
+
+test('default daily scan target reports 500 scanner symbols', async () => {
+  testables._cache.clear();
+  const result = await runDailyScan('test-user-default-500', true, undefined, deps);
+  assert.equal(result.summary.scannerSymbols, 500);
+  assert.equal(result.scan_debug.universe_count, 500);
+});

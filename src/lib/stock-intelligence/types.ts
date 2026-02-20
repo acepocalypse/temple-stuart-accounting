@@ -139,6 +139,7 @@ export interface TradeCard {
   sector: string | null;
   liquidityRank: number;
   status: 'ACTIONABLE' | 'WATCH_ONLY';
+  manuallyPromoted?: boolean;
   price: number;
   regime: MarketRegime;
   pillars: PillarScores;

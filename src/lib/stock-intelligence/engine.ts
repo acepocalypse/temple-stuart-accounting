@@ -6,7 +6,7 @@ import { percentileRank, round } from './math';
 import { buildTriggerPlan, gapRiskProxy } from './plan';
 import { fetchEarnings, fetchFundamentals, fetchNewsSnapshot } from './providers/finnhub';
 import { fetchMacroSnapshot } from './providers/fred';
-import { generatePlainEnglishSummary } from './providers/genai';
+import { generatePlainEnglishSummaries } from './providers/genai';
 import { fetchYahooCandles } from './providers/yahoo';
 import { getScanProgress, setScanProgress } from './progress';
 import { scorePillars, overallScore } from './scoring';
@@ -86,6 +86,7 @@ const defaultDeps: EngineDeps = {
 
 const dailyCache = new Map<string, CachedDaily>();
 const refreshCache = new Map<string, { generatedAtMs: number; result: RefreshResult }>();
+const manualPromotions = new Map<string, { sourceDailyScanAt: string; tickers: Set<string> }>();
 const DAILY_CACHE_MS = 24 * 60 * 60 * 1000;
 const REFRESH_CACHE_MS = 10 * 60 * 1000;
 
@@ -295,13 +296,16 @@ function buildScanDebug(args: {
 }
 
 async function narrateCards(cards: TradeCard[], providerFailures: string[]): Promise<TradeCard[]> {
-  const out: TradeCard[] = [];
-  for (const card of cards) {
-    const summary = await generatePlainEnglishSummary(card);
-    if (summary.error) providerFailures.push(`${card.ticker} genai: ${summary.error}`);
-    out.push({ ...card, plainEnglish: summary.text });
-  }
-  return out;
+  if (cards.length === 0) return [];
+  const batch = await generatePlainEnglishSummaries(cards);
+  return cards.map((card) => {
+    const summary = batch.byTicker.get(card.ticker);
+    if (summary?.error) providerFailures.push(`${card.ticker} genai: ${summary.error}`);
+    return {
+      ...card,
+      plainEnglish: summary?.text || card.plainEnglish,
+    };
+  });
 }
 
 function makeCard(args: {
@@ -405,6 +409,88 @@ function partitionCards(cards: TradeCard[]): { cards: TradeCard[]; watchlist: Tr
   };
 }
 
+function hasPromotionEligiblePlan(card: TradeCard): boolean {
+  if (!card.plan) return false;
+  return (
+    Number.isFinite(card.plan.triggerPrice) &&
+    Number.isFinite(card.plan.stopPrice) &&
+    Number.isFinite(card.plan.riskPerShare) &&
+    Number.isFinite(card.plan.oneR) &&
+    Number.isFinite(card.plan.twoR)
+  );
+}
+
+function getPromotionSet(userKey: string, sourceDailyScanAt: string): Set<string> {
+  const state = manualPromotions.get(userKey);
+  if (!state) return new Set();
+  if (state.sourceDailyScanAt !== sourceDailyScanAt) return new Set();
+  return state.tickers;
+}
+
+function clearManualPromotions(userKey: string): void {
+  manualPromotions.delete(userKey);
+}
+
+function applyManualPromotions(
+  userKey: string,
+  sourceDailyScanAt: string,
+  cards: TradeCard[],
+  watchlist: TradeCard[],
+): { cards: TradeCard[]; watchlist: TradeCard[] } {
+  const promoted = getPromotionSet(userKey, sourceDailyScanAt);
+  if (promoted.size === 0) return { cards, watchlist };
+
+  const boostedCards = cards.map((card) =>
+    promoted.has(card.ticker.toUpperCase())
+      ? {
+          ...card,
+          status: 'ACTIONABLE' as const,
+          blocked: false,
+          blockedReason: null,
+          manuallyPromoted: true,
+        }
+      : card,
+  );
+
+  const promotedFromWatch: TradeCard[] = [];
+  const remainingWatch: TradeCard[] = [];
+  for (const card of watchlist) {
+    if (promoted.has(card.ticker.toUpperCase()) && hasPromotionEligiblePlan(card)) {
+      promotedFromWatch.push({
+        ...card,
+        status: 'ACTIONABLE' as const,
+        blocked: false,
+        blockedReason: null,
+        manuallyPromoted: true,
+      });
+      continue;
+    }
+    remainingWatch.push(card);
+  }
+
+  return {
+    cards: [...boostedCards, ...promotedFromWatch],
+    watchlist: remainingWatch,
+  };
+}
+
+function addManualPromotion(
+  userKey: string,
+  sourceDailyScanAt: string,
+  ticker: string,
+): void {
+  const normalized = ticker.toUpperCase();
+  const existing = manualPromotions.get(userKey);
+  if (!existing || existing.sourceDailyScanAt !== sourceDailyScanAt) {
+    manualPromotions.set(userKey, {
+      sourceDailyScanAt,
+      tickers: new Set([normalized]),
+    });
+    return;
+  }
+  existing.tickers.add(normalized);
+}
+
 function adaptivePool(cards: TradeCard[], threshold: number, config: EngineConfig): TradeCard[] {
   const poolCap = Math.max(
     config.shortlistTargetMax,
@@ -433,6 +519,7 @@ export async function runDailyScan(
   if (!refresh && cached && Date.now() - cached.generatedAtMs < DAILY_CACHE_MS) {
     return cached.result;
   }
+  clearManualPromotions(userKey);
 
   setScanProgress(userKey, {
     running: true,
@@ -631,6 +718,7 @@ export async function runDailyScan(
     message: `Narrated ${narratedCards.length}/${partitioned.cards.length + partitioned.watchlist.length}`,
   });
   const narratedWatch = await narrateCards(partitioned.watchlist, providerFailures);
+  const finalCards = narratedCards.slice(0, config.shortlistTargetMax);
 
   const result: DailyScanResult = {
     generatedAt: nowIso(),
@@ -641,15 +729,15 @@ export async function runDailyScan(
       scoredUniverse: evaluated.length,
       threshold: round(adaptive.threshold, 2),
       shortlisted: pool.length,
-      returnedCards: narratedCards.length,
-      noSetups: narratedCards.length === 0,
+      returnedCards: finalCards.length,
+      noSetups: finalCards.length === 0,
     },
     scan_debug: scanDebug,
-    cards: narratedCards.slice(0, config.shortlistTargetMax),
+    cards: finalCards,
     watchlist: narratedWatch,
     diagnostics: {
       errors,
-      fetchGaps: narratedCards.length === 0 ? ['No high-quality setups today.'] : [],
+      fetchGaps: finalCards.length === 0 ? ['No high-quality setups today.'] : [],
       providerFailures,
       runtimeMs: Date.now() - startMs,
     },
@@ -791,16 +879,22 @@ export async function runIntradayRefresh(
   const partitioned = partitionCards(cards);
   const narratedCards = await narrateCards(partitioned.cards, providerFailures);
   const narratedWatch = await narrateCards(partitioned.watchlist, providerFailures);
+  const promoted = applyManualPromotions(
+    userKey,
+    base.result.generatedAt,
+    narratedCards.slice(0, config.shortlistTargetMax),
+    narratedWatch,
+  );
 
   const result: RefreshResult = {
     generatedAt: nowIso(),
     summary: {
       sourceDailyScanAt: base.result.generatedAt,
       refreshedSymbols: symbols.length,
-      returnedCards: narratedCards.length,
+      returnedCards: promoted.cards.length,
     },
-    cards: narratedCards.slice(0, config.shortlistTargetMax),
-    watchlist: narratedWatch,
+    cards: promoted.cards,
+    watchlist: promoted.watchlist,
     diagnostics: {
       errors: [],
       fetchGaps: [],
@@ -812,13 +906,93 @@ export async function runIntradayRefresh(
   return result;
 }
 
+export function listManualPromotions(
+  userKey = 'manual-stock-user',
+): { sourceDailyScanAt: string; tickers: string[] } {
+  const state = manualPromotions.get(userKey);
+  if (!state) return { sourceDailyScanAt: '', tickers: [] };
+  return {
+    sourceDailyScanAt: state.sourceDailyScanAt,
+    tickers: [...state.tickers].sort(),
+  };
+}
+
+export function promoteWatchlistTicker(
+  ticker: string,
+  userKey = 'manual-stock-user',
+): DailyScanResult | RefreshResult {
+  const normalized = ticker.toUpperCase();
+  const base = dailyCache.get(userKey);
+  if (!base) {
+    throw new Error('Run a daily scan first to build a watchlist.');
+  }
+
+  const cachedRefresh = refreshCache.get(userKey)?.result;
+  const sourceMatches =
+    cachedRefresh && cachedRefresh.summary.sourceDailyScanAt === base.result.generatedAt;
+  const currentCards = sourceMatches ? cachedRefresh.cards : base.result.cards;
+  const currentWatchlist = sourceMatches ? cachedRefresh.watchlist : base.result.watchlist;
+  const target = currentWatchlist.find((c) => c.ticker.toUpperCase() === normalized);
+  if (!target) {
+    throw new Error(`Ticker ${normalized} is not in the current watchlist.`);
+  }
+  if (!hasPromotionEligiblePlan(target)) {
+    throw new Error(`Ticker ${normalized} cannot be promoted without a valid trade plan.`);
+  }
+
+  addManualPromotion(userKey, base.result.generatedAt, normalized);
+  const promoted = applyManualPromotions(
+    userKey,
+    base.result.generatedAt,
+    currentCards,
+    currentWatchlist,
+  );
+
+  if (sourceMatches && cachedRefresh) {
+    const nextRefresh: RefreshResult = {
+      ...cachedRefresh,
+      cards: promoted.cards,
+      watchlist: promoted.watchlist,
+      summary: {
+        ...cachedRefresh.summary,
+        returnedCards: promoted.cards.length,
+      },
+    };
+    refreshCache.set(userKey, {
+      generatedAtMs: Date.now(),
+      result: nextRefresh,
+    });
+    return nextRefresh;
+  }
+
+  const nextDaily: DailyScanResult = {
+    ...base.result,
+    cards: promoted.cards,
+    watchlist: promoted.watchlist,
+    summary: {
+      ...base.result.summary,
+      returnedCards: promoted.cards.length,
+      noSetups: promoted.cards.length === 0,
+    },
+  };
+  dailyCache.set(userKey, {
+    ...base,
+    result: nextDaily,
+    generatedAtMs: Date.now(),
+  });
+  return nextDaily;
+}
+
 export const testables = {
   buildDailyFeatureRows,
   parseConfig,
+  applyManualPromotions,
+  hasPromotionEligiblePlan,
   _cache: {
     clear: () => {
       dailyCache.clear();
       refreshCache.clear();
+      manualPromotions.clear();
     },
   },
 };

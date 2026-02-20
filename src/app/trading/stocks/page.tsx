@@ -7,6 +7,7 @@ type Card = {
   sector: string | null;
   liquidityRank: number;
   status: 'ACTIONABLE' | 'WATCH_ONLY';
+  manuallyPromoted?: boolean;
   blocked: boolean;
   blockedReason: string | null;
   overallScore: number;
@@ -64,6 +65,8 @@ type ProgressResponse = {
 };
 
 const fmt = (n: number | null | undefined) => (n == null ? '-' : n.toFixed(2));
+const stockAnalysisUrl = (ticker: string) =>
+  `https://stockanalysis.com/stocks/${encodeURIComponent(ticker)}`;
 
 export default function StockIntelligencePage() {
   const [loadingScan, setLoadingScan] = useState(false);
@@ -71,6 +74,7 @@ export default function StockIntelligencePage() {
   const [scan, setScan] = useState<ScanResponse | null>(null);
   const [shortlist, setShortlist] = useState<ScanResponse | null>(null);
   const [scanProgress, setScanProgress] = useState<ProgressResponse | null>(null);
+  const [promotingTicker, setPromotingTicker] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const cards = useMemo(() => shortlist?.cards || scan?.cards || [], [scan, shortlist]);
@@ -161,6 +165,40 @@ export default function StockIntelligencePage() {
     }
   }
 
+  async function promoteTicker(ticker: string) {
+    setError(null);
+    setPromotingTicker(ticker);
+    const snapshot = shortlist || scan;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    try {
+      const res = await fetch('/api/stocks/watchlist/promote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, snapshot }),
+        signal: controller.signal,
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const errorMessage =
+        typeof data.error === 'string' && data.error.trim() ? data.error : `HTTP ${res.status}`;
+      if (!res.ok) throw new Error(errorMessage);
+      const result = data?.result as ScanResponse | undefined;
+      if (!result) throw new Error('Promotion response missing result payload.');
+      setShortlist(result);
+    } catch (e: unknown) {
+      const message =
+        e instanceof Error && e.name === 'AbortError'
+          ? 'Move to Actionable timed out. Please retry.'
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      setError(message);
+    } finally {
+      clearTimeout(timeout);
+      setPromotingTicker(null);
+    }
+  }
+
   return (
     <div className="p-6 max-w-[1400px] mx-auto space-y-4 min-h-screen flex flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -231,7 +269,7 @@ export default function StockIntelligencePage() {
           Actionable Trade Cards ({cards.length})
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-xs">
+          <table className="w-full text-xs text-gray-900">
             <thead className="bg-[#2d1b4e] text-white">
               <tr>
                 <th className="text-left px-3 py-2">Symbol</th>
@@ -247,10 +285,24 @@ export default function StockIntelligencePage() {
                 <th className="text-right px-3 py-2">2R</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-gray-100 text-gray-900">
               {cards.map((card) => (
                 <tr key={card.ticker}>
-                  <td className="px-3 py-2 font-mono font-semibold">{card.ticker}</td>
+                  <td className="px-3 py-2 font-mono font-semibold">
+                    <a
+                      href={stockAnalysisUrl(card.ticker)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-gray-900 underline-offset-2 hover:underline"
+                    >
+                      {card.ticker}
+                    </a>
+                    {card.manuallyPromoted ? (
+                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-sans font-medium text-amber-800">
+                        Manual
+                      </span>
+                    ) : null}
+                  </td>
                   <td className="px-3 py-2">{card.status}</td>
                   <td className="px-3 py-2 text-right font-mono">{card.liquidityRank}</td>
                   <td className="px-3 py-2">{card.confidence.label}</td>
@@ -284,10 +336,27 @@ export default function StockIntelligencePage() {
             {watchlist.map((w) => (
               <div key={w.ticker} className="px-4 py-2 border-b border-gray-100 text-xs">
                 <div className="flex justify-between">
-                  <span className="font-mono font-semibold text-gray-900">{w.ticker}</span>
+                  <a
+                    href={stockAnalysisUrl(w.ticker)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono font-semibold text-gray-900 underline-offset-2 hover:underline"
+                  >
+                    {w.ticker}
+                  </a>
                   <span className="text-gray-700">{w.blockedReason || 'Watch'}</span>
                 </div>
                 <div className="text-gray-700 mt-1">{w.plainEnglish || w.why[0]}</div>
+                <div className="mt-2">
+                  <button
+                    type="button"
+                    onClick={() => promoteTicker(w.ticker)}
+                    disabled={!w.plan || promotingTicker === w.ticker}
+                    className="px-2 py-1 text-[11px] border border-gray-300 text-gray-800 disabled:opacity-50 hover:bg-gray-50"
+                  >
+                    {promotingTicker === w.ticker ? 'Moving...' : 'Move to Actionable'}
+                  </button>
+                </div>
               </div>
             ))}
             {watchlist.length === 0 && (

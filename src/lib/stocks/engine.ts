@@ -26,7 +26,7 @@ import type {
   TriggerDecision,
 } from './types';
 import { atr, bollinger, clamp, ema, round, rsi, sma } from './indicators';
-import { SEED_SYMBOLS } from './symbols';
+import { buildSeedUniverse } from './symbols';
 
 const DEFAULT_CONFIG: StockEngineConfig = {
   accountSize: 100,
@@ -54,6 +54,7 @@ const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 const DAILY_FETCH_CONCURRENCY = 24;
 const INTRADAY_FETCH_CONCURRENCY = 12;
 const PROFILE_FETCH_CONCURRENCY = 8;
+const SCANNER_SYMBOL_TARGET = 500;
 
 interface FinnhubTickerEnrichment {
   fundamentals: FinnhubFundamentals | null;
@@ -1333,7 +1334,7 @@ async function runFullDailyScan(
   const errors: string[] = [];
   const fetchGaps: string[] = [];
 
-  const symbols = [...SEED_SYMBOLS];
+  const symbols = buildSeedUniverse(SCANNER_SYMBOL_TARGET, { excludeEtfs: false });
 
   const earnings = await fetchEarningsBlackoutMap(config.earningsBlackoutDays);
   if (earnings.error) fetchGaps.push(earnings.error);
@@ -1618,5 +1619,4 @@ export async function getShortlistRefresh(
   shortlistCache.set(key, { generatedAtMs: Date.now(), result: refreshed });
   return refreshed;
 }
-
 
