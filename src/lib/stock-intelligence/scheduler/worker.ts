@@ -1,6 +1,7 @@
 import { runDailyScan, runIntradayRefresh } from '../engine';
-import type { DailyScanResult, RefreshResult } from '../types';
+import type { DailyScanResult, RefreshResult, TradeCard } from '../types';
 import { diffActionable, snapshotActionable } from '../notify/diff';
+import { executeAlpacaPaperTrades } from '../execution/alpaca';
 import {
   DEFAULT_SCHEDULER_STATE,
   loadSchedulerState,
@@ -41,6 +42,11 @@ type WorkerDeps = {
   runDaily: (userKey: string, refresh: boolean, overrides?: Record<string, unknown>) => Promise<DailyScanResult>;
   runRefresh: (userKey: string, refresh: boolean, overrides?: Record<string, unknown>) => Promise<RefreshResult>;
   notify: (text: string) => Promise<void>;
+  executeTrades: (cards: TradeCard[], mode: 'daily' | 'refresh' | 'fallback_rescan') => Promise<{
+    placed: Array<{ ticker: string; orderId: string }>;
+    skipped: Array<{ ticker: string; reason: string }>;
+    errors: Array<{ ticker: string; error: string }>;
+  }>;
   loadState: (path: string) => Promise<SchedulerState>;
   saveState: (path: string, state: SchedulerState) => Promise<void>;
   log: (msg: string, details?: Record<string, unknown>) => void;
@@ -51,6 +57,7 @@ const defaultDeps: WorkerDeps = {
   runDaily: (userKey, refresh, overrides) => runDailyScan(userKey, refresh, overrides),
   runRefresh: (userKey, refresh, overrides) => runIntradayRefresh(userKey, refresh, overrides),
   notify: (text) => sendTelegramMessage(text),
+  executeTrades: (cards, mode) => executeAlpacaPaperTrades({ cards, mode }),
   loadState: (path) => loadSchedulerState(path),
   saveState: (path, state) => saveSchedulerState(path, state),
   log: (msg, details) => console.log(`[scheduler] ${msg}`, details || {}),
@@ -224,6 +231,24 @@ export class SchedulerWorker {
           : null;
       const message = buildActionableMessage(mode, result, this.config, parts, stateLine || undefined);
       await this.deps.notify(message);
+    }
+
+    const tradeReport = await this.deps.executeTrades(result.cards || [], mode);
+    if (tradeReport.placed.length > 0) {
+      const tradeMessage = [
+        `${mode.toUpperCase()} paper orders placed`,
+        ...tradeReport.placed.map((p) => `- ${p.ticker}${p.orderId ? ` (${p.orderId})` : ''}`),
+        this.config.appUrl ? `Open: ${this.config.appUrl}/trading/stocks` : null,
+      ]
+        .filter((x): x is string => Boolean(x))
+        .join('\n');
+      await this.deps.notify(tradeMessage);
+    }
+    if (tradeReport.errors.length > 0) {
+      this.deps.log('alpaca_errors', {
+        count: tradeReport.errors.length,
+        sample: tradeReport.errors.slice(0, 3),
+      });
     }
     this.state.lastActionableSnapshot = currentSnapshot;
   }

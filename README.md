@@ -93,6 +93,16 @@ SCHEDULER_STATE_PATH="/data/scheduler-state.json"
 # Telegram (optional, for phone alerts)
 TELEGRAM_BOT_TOKEN="your-telegram-bot-token"
 TELEGRAM_CHAT_ID="your-telegram-chat-id"
+
+# Alpaca paper-trading automation (optional, disabled by default)
+ALPACA_PAPER_TRADING_ENABLED="false"
+ALPACA_API_KEY="your-alpaca-key-id"
+ALPACA_API_SECRET="your-alpaca-secret-key"
+ALPACA_BASE_URL="https://paper-api.alpaca.markets"
+ALPACA_EXECUTE_ON="refresh"
+ALPACA_MAX_ORDERS_PER_RUN="3"
+ALPACA_NOTIONAL_USD="1000"
+ALPACA_ORDER_TAKE_PROFIT_R_MULT="1"
 ```
 
 ## Run
@@ -112,6 +122,15 @@ Scheduler behavior:
 - Sends Telegram alert when actionable set changes
 - Enters fallback mode when `returnedCards == 0` and `shortlisted < SCHEDULER_FALLBACK_POOL_MIN`
 - Runs fallback mini rescan every `SCHEDULER_FALLBACK_RESCAN_MINUTES` while fallback remains active
+
+Alpaca paper-trading behavior (only when `ALPACA_PAPER_TRADING_ENABLED=true`):
+- Trades only `ACTIONABLE` cards with valid plan/stop/risk
+- Default executes on `refresh` mode only (`ALPACA_EXECUTE_ON`)
+- Skips symbols with existing open position/order
+- Uses bracket market orders with:
+  - stop = card stop price
+  - take profit = trigger + `riskPerShare * ALPACA_ORDER_TAKE_PROFIT_R_MULT`
+- Position sizing uses fixed notional per order (`ALPACA_NOTIONAL_USD`)
 
 ## Docker
 Example with separate app + scheduler services:

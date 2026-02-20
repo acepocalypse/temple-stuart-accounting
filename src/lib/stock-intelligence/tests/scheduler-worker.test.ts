@@ -149,6 +149,11 @@ test('scheduler tick runs daily+refresh once per slot/day and notifies on action
       notify: async () => {
         notifyCalls += 1;
       },
+      executeTrades: async () => ({
+        placed: [],
+        skipped: [],
+        errors: [],
+      }),
       loadState: async () => ({ ...DEFAULT_SCHEDULER_STATE }),
       saveState: async (_path, state) => {
         saved = state;

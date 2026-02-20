@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 type Card = {
   ticker: string;
@@ -64,6 +64,60 @@ type ProgressResponse = {
   percent: number;
 };
 
+type AutomationStatus = {
+  nowIso: string;
+  scheduler: {
+    enabled: boolean;
+    timeZone: string;
+    windowStartEt: string;
+    windowEndEt: string;
+    dailyScanTimeEt: string;
+    refreshMinutes: number;
+    fallbackRescanMinutes: number;
+    fallbackPoolMin: number;
+    statePath: string;
+  };
+  market: {
+    inWindow: boolean;
+    dateKey: string;
+    hour: number;
+    minute: number;
+  };
+  state: {
+    fallbackActive: boolean;
+    lastDailyRunMarketDate: string | null;
+    lastRefreshSlotKey: string | null;
+    lastFallbackRescanAt: string | null;
+    lastActionableSnapshot: Array<{ ticker: string; score: number; triggerPrice: number | null }> | null;
+  };
+  alpaca: {
+    enabled: boolean;
+    connected: boolean;
+    error: string | null;
+    executeOnModes: string[];
+    account: {
+      status: string | null;
+      cash: string | null;
+      buyingPower: string | null;
+      portfolioValue: string | null;
+      currency: string | null;
+    } | null;
+    positionsCount: number;
+    openOrdersCount: number;
+    positionSymbols: string[];
+    openOrderSymbols: string[];
+    recentOrderSymbols: string[];
+    recentOrders: Array<{
+      id: string;
+      symbol: string;
+      status: string;
+      side: string;
+      qty: string;
+      createdAt: string | null;
+    }>;
+  };
+};
+
 const fmt = (n: number | null | undefined) => (n == null ? '-' : n.toFixed(2));
 const stockAnalysisUrl = (ticker: string) =>
   `https://stockanalysis.com/stocks/${encodeURIComponent(ticker)}`;
@@ -75,12 +129,47 @@ export default function StockIntelligencePage() {
   const [shortlist, setShortlist] = useState<ScanResponse | null>(null);
   const [scanProgress, setScanProgress] = useState<ProgressResponse | null>(null);
   const [promotingTicker, setPromotingTicker] = useState<string | null>(null);
+  const [automation, setAutomation] = useState<AutomationStatus | null>(null);
+  const [automationLoading, setAutomationLoading] = useState(false);
+  const [automationAction, setAutomationAction] = useState<string | null>(null);
+  const [automationMessage, setAutomationMessage] = useState<string | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const cards = useMemo(() => shortlist?.cards || scan?.cards || [], [scan, shortlist]);
   const watchlist = useMemo(() => shortlist?.watchlist || scan?.watchlist || [], [scan, shortlist]);
   const summary = (shortlist?.summary || scan?.summary || null) as Record<string, number | string> | null;
   const diagnostics = shortlist?.diagnostics || scan?.diagnostics || null;
+  const positionSymbols = useMemo(
+    () => new Set((automation?.alpaca.positionSymbols || []).map((s) => s.toUpperCase())),
+    [automation?.alpaca.positionSymbols],
+  );
+  const openOrderSymbols = useMemo(
+    () => new Set((automation?.alpaca.openOrderSymbols || []).map((s) => s.toUpperCase())),
+    [automation?.alpaca.openOrderSymbols],
+  );
+  const recentOrderSymbols = useMemo(
+    () => new Set((automation?.alpaca.recentOrderSymbols || []).map((s) => s.toUpperCase())),
+    [automation?.alpaca.recentOrderSymbols],
+  );
+
+  useEffect(() => {
+    void loadAutomationStatus();
+  }, []);
+
+  async function loadAutomationStatus() {
+    setAutomationLoading(true);
+    try {
+      const res = await fetch('/api/stocks/automation/status');
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      setAutomation(data as AutomationStatus);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAutomationLoading(false);
+    }
+  }
 
   async function runDailyScan() {
     setError(null);
@@ -131,6 +220,7 @@ export default function StockIntelligencePage() {
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setScan(data);
       setShortlist(null);
+      void loadAutomationStatus();
       setScanProgress((prev) =>
         prev
           ? {
@@ -158,6 +248,7 @@ export default function StockIntelligencePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setShortlist(data);
+      void loadAutomationStatus();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -185,6 +276,7 @@ export default function StockIntelligencePage() {
       const result = data?.result as ScanResponse | undefined;
       if (!result) throw new Error('Promotion response missing result payload.');
       setShortlist(result);
+      void loadAutomationStatus();
     } catch (e: unknown) {
       const message =
         e instanceof Error && e.name === 'AbortError'
@@ -199,27 +291,63 @@ export default function StockIntelligencePage() {
     }
   }
 
+  async function runAutomationAction(action: string) {
+    setAutomationAction(action);
+    setAutomationMessage(null);
+    setError(null);
+    try {
+      const res = await fetch('/api/stocks/automation/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const message = typeof data.error === 'string' ? data.error : `HTTP ${res.status}`;
+      if (!res.ok) throw new Error(message);
+
+      const result = data.result as ScanResponse | undefined;
+      if (action === 'run_daily_now' && result) {
+        setScan(result);
+        setShortlist(null);
+      }
+      if (action === 'run_refresh_now' && result) {
+        setShortlist(result);
+      }
+
+      if (action === 'test_telegram') setAutomationMessage('Telegram test sent.');
+      if (action === 'test_alpaca') setAutomationMessage('Alpaca connectivity checked.');
+      if (action === 'run_scheduler_tick') setAutomationMessage('Scheduler tick executed once.');
+      if (action === 'run_daily_now') setAutomationMessage('Daily scan executed.');
+      if (action === 'run_refresh_now') setAutomationMessage('Refresh executed.');
+      await loadAutomationStatus();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAutomationAction(null);
+    }
+  }
+
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-4 min-h-screen flex flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="mx-auto flex min-h-screen w-full max-w-[1500px] flex-col gap-4 bg-gray-100 px-4 py-5 sm:px-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-300 bg-white px-4 py-3 shadow-sm">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Manual Stock Intelligence</h1>
           <p className="text-sm text-gray-600">
             Daily bias + 15m trigger, whole-share sizing, no broker execution.
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             onClick={runDailyScan}
             disabled={loadingScan}
-            className="px-3 py-2 text-sm bg-[#2d1b4e] text-white disabled:opacity-50 hover:bg-[#3d2b5e]"
+            className="rounded-md bg-[#2d1b4e] px-3 py-2 text-sm text-white hover:bg-[#3d2b5e] disabled:opacity-50"
           >
             {loadingScan ? 'Running Daily Scan...' : 'Run Daily Scan'}
           </button>
           <button
             onClick={refreshShortlist}
             disabled={loadingShortlist}
-            className="px-3 py-2 text-sm bg-gray-900 text-white disabled:opacity-50 hover:bg-black"
+            className="rounded-md bg-gray-900 px-3 py-2 text-sm text-white hover:bg-black disabled:opacity-50"
           >
             {loadingShortlist ? 'Refreshing 15m...' : 'Refresh 15m Shortlist'}
           </button>
@@ -233,7 +361,7 @@ export default function StockIntelligencePage() {
       )}
 
       {summary && (
-        <div className="grid grid-cols-2 lg:grid-cols-7 gap-2">
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
           <Stat label="Scanner Symbols" value={Number(summary.scannerSymbols || 0)} />
           <Stat label="Filtered" value={Number(summary.filteredByPriceLiquidity || 0)} />
           <Stat label="Scored" value={Number(summary.scoredUniverse || 0)} />
@@ -244,8 +372,156 @@ export default function StockIntelligencePage() {
         </div>
       )}
 
+      <section className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-gray-300 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-800">
+          <span>Automation</span>
+          <button
+            type="button"
+            onClick={loadAutomationStatus}
+            disabled={automationLoading}
+            className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {automationLoading ? 'Refreshing...' : 'Refresh Status'}
+          </button>
+        </div>
+        <div className="space-y-4 p-4 text-xs text-gray-800">
+          <div className="flex flex-wrap gap-2">
+            <StatusPill label="Scheduler" on={Boolean(automation?.scheduler.enabled)} />
+            <StatusPill label="Market Window" on={Boolean(automation?.market.inWindow)} />
+            <StatusPill label="Fallback" on={Boolean(automation?.state.fallbackActive)} offText="Idle" />
+            <StatusPill label="Alpaca" on={Boolean(automation?.alpaca.connected)} offText="Offline" />
+            <StatusPill
+              label="Auto-Trade"
+              on={Boolean(automation?.alpaca.enabled && automation?.alpaca.connected)}
+              onText="Armed"
+              offText="Disarmed"
+            />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
+            <div className="space-y-3 rounded-md border border-gray-300 bg-gray-50 p-3">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+                <Stat label="Positions" value={automation?.alpaca.positionsCount || 0} />
+                <Stat label="Open Orders" value={automation?.alpaca.openOrdersCount || 0} />
+                <Stat label="Actionable Snap" value={automation?.state.lastActionableSnapshot?.length || 0} />
+                <Stat label="Refresh Mins" value={Number(automation?.scheduler.refreshMinutes || 0)} />
+              </div>
+              <div className="grid gap-x-4 gap-y-1 text-[11px] text-gray-700 md:grid-cols-2">
+                <div>
+                  Market Time:{' '}
+                  {automation
+                    ? `${automation.market.dateKey} ${String(automation.market.hour).padStart(2, '0')}:${String(automation.market.minute).padStart(2, '0')} ET`
+                    : '-'}
+                </div>
+                <div>
+                  Window:{' '}
+                  {automation
+                    ? `${automation.scheduler.windowStartEt} - ${automation.scheduler.windowEndEt} ET`
+                    : '-'}
+                </div>
+                <div>Daily Scan Time: {automation?.scheduler.dailyScanTimeEt || '-'}</div>
+                <div>Alpaca Mode: {automation?.alpaca.executeOnModes?.join(', ') || '-'}</div>
+                <div className="md:col-span-2">
+                  Account:{' '}
+                  {automation?.alpaca.account
+                    ? `${automation.alpaca.account.status} | Cash ${automation.alpaca.account.cash} | Buying Power ${automation.alpaca.account.buyingPower}`
+                    : automation?.alpaca.error || '-'}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-md border border-gray-300 bg-white p-3">
+              <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-600">
+                Controls
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => runAutomationAction('run_daily_now')}
+                  disabled={automationAction !== null}
+                  className="rounded-md border border-[#2d1b4e] bg-[#2d1b4e] px-2 py-1.5 text-xs text-white hover:bg-[#3d2b5e] disabled:opacity-50"
+                >
+                  {automationAction === 'run_daily_now' ? 'Running...' : 'Run Daily'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runAutomationAction('run_refresh_now')}
+                  disabled={automationAction !== null}
+                  className="rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {automationAction === 'run_refresh_now' ? 'Running...' : 'Run Refresh'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runAutomationAction('run_scheduler_tick')}
+                  disabled={automationAction !== null}
+                  className="rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {automationAction === 'run_scheduler_tick' ? 'Running...' : 'Run Tick'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runAutomationAction('test_alpaca')}
+                  disabled={automationAction !== null}
+                  className="rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {automationAction === 'test_alpaca' ? 'Running...' : 'Test Alpaca'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runAutomationAction('test_telegram')}
+                  disabled={automationAction !== null}
+                  className="col-span-2 rounded-md border border-gray-300 px-2 py-1.5 text-xs text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {automationAction === 'test_telegram' ? 'Running...' : 'Test Telegram'}
+                </button>
+              </div>
+              {automationMessage ? (
+                <div className="mt-2 rounded border border-[#d5c6ea] bg-[#efe8fa] px-2 py-1 text-xs text-[#2d1b4e]">
+                  {automationMessage}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1 text-[11px] font-medium uppercase tracking-wide text-gray-600">
+              Recent Alpaca Orders
+            </div>
+            {(automation?.alpaca.recentOrders || []).length > 0 ? (
+              <div className="max-h-48 overflow-auto rounded-md border border-gray-300">
+                <table className="w-full text-xs text-gray-900">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-2 py-1 text-left">Symbol</th>
+                      <th className="px-2 py-1 text-left">Side</th>
+                      <th className="px-2 py-1 text-left">Qty</th>
+                      <th className="px-2 py-1 text-left">Status</th>
+                      <th className="px-2 py-1 text-left">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {(automation?.alpaca.recentOrders || []).map((o) => (
+                      <tr key={o.id}>
+                        <td className="px-2 py-1 font-mono">{o.symbol}</td>
+                        <td className="px-2 py-1">{o.side}</td>
+                        <td className="px-2 py-1">{o.qty}</td>
+                        <td className="px-2 py-1">{o.status}</td>
+                        <td className="px-2 py-1">{o.createdAt || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-gray-600">No recent orders.</div>
+            )}
+          </div>
+        </div>
+      </section>
+
       {loadingScan && scanProgress && (
-        <div className="border border-gray-200 bg-white px-3 py-2 text-xs">
+        <div className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs shadow-sm">
           <div className="flex items-center justify-between">
             <span className="font-medium text-gray-800">
               Daily scan: {scanProgress.phase.replaceAll('_', ' ')}
@@ -264,12 +540,13 @@ export default function StockIntelligencePage() {
         </div>
       )}
 
-      <section className="bg-white border border-gray-200">
-        <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 text-sm font-medium text-gray-700">
-          Actionable Trade Cards ({cards.length})
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-gray-900">
+      <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2.2fr)_minmax(320px,1fr)]">
+        <div className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
+          <div className="border-b border-gray-300 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-800">
+            Actionable Trade Cards ({cards.length})
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-gray-900">
             <thead className="bg-[#2d1b4e] text-white">
               <tr>
                 <th className="text-left px-3 py-2">Symbol</th>
@@ -298,8 +575,25 @@ export default function StockIntelligencePage() {
                       {card.ticker}
                     </a>
                     {card.manuallyPromoted ? (
-                      <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-sans font-medium text-amber-800">
+                      <span className="ml-2 rounded border border-[#d5c6ea] bg-[#efe8fa] px-1.5 py-0.5 text-[10px] font-sans font-medium text-[#2d1b4e]">
                         Manual
+                      </span>
+                    ) : null}
+                    {positionSymbols.has(card.ticker.toUpperCase()) ? (
+                      <span className="ml-2 rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-[10px] font-sans font-medium text-gray-700">
+                        Position
+                      </span>
+                    ) : null}
+                    {openOrderSymbols.has(card.ticker.toUpperCase()) ? (
+                      <span className="ml-2 rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-[10px] font-sans font-medium text-gray-700">
+                        Open Order
+                      </span>
+                    ) : null}
+                    {recentOrderSymbols.has(card.ticker.toUpperCase()) &&
+                    !openOrderSymbols.has(card.ticker.toUpperCase()) &&
+                    !positionSymbols.has(card.ticker.toUpperCase()) ? (
+                      <span className="ml-2 rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-[10px] font-sans font-medium text-gray-700">
+                        Recent Order
                       </span>
                     ) : null}
                   </td>
@@ -323,19 +617,18 @@ export default function StockIntelligencePage() {
                 </tr>
               )}
             </tbody>
-          </table>
+            </table>
+          </div>
         </div>
-      </section>
-
-      <section className="grid lg:grid-cols-2 gap-4 flex-1 min-h-0">
-        <div className="bg-white border border-gray-200 flex flex-col min-h-0">
-          <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 text-sm font-medium text-gray-700">
+        <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
+          <div className="border-b border-gray-300 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-800">
             Watchlist ({watchlist.length})
           </div>
-          <div className="flex-1 min-h-0 overflow-auto">
-            {watchlist.map((w) => (
-              <div key={w.ticker} className="px-4 py-2 border-b border-gray-100 text-xs">
-                <div className="flex justify-between">
+          <div className="min-h-0 flex-1 overflow-auto">
+          {watchlist.map((w) => (
+            <div key={w.ticker} className="px-4 py-2 border-b border-gray-100 text-xs">
+              <div className="flex justify-between">
+                <div>
                   <a
                     href={stockAnalysisUrl(w.ticker)}
                     target="_blank"
@@ -344,32 +637,59 @@ export default function StockIntelligencePage() {
                   >
                     {w.ticker}
                   </a>
-                  <span className="text-gray-700">{w.blockedReason || 'Watch'}</span>
+                  {positionSymbols.has(w.ticker.toUpperCase()) ? (
+                    <span className="ml-2 rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-[10px] font-sans font-medium text-gray-700">
+                      Position
+                    </span>
+                  ) : null}
+                  {openOrderSymbols.has(w.ticker.toUpperCase()) ? (
+                    <span className="ml-2 rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-[10px] font-sans font-medium text-gray-700">
+                      Open Order
+                    </span>
+                  ) : null}
+                  {recentOrderSymbols.has(w.ticker.toUpperCase()) &&
+                  !openOrderSymbols.has(w.ticker.toUpperCase()) &&
+                  !positionSymbols.has(w.ticker.toUpperCase()) ? (
+                    <span className="ml-2 rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-[10px] font-sans font-medium text-gray-700">
+                      Recent Order
+                    </span>
+                  ) : null}
                 </div>
-                <div className="text-gray-700 mt-1">{w.plainEnglish || w.why[0]}</div>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    onClick={() => promoteTicker(w.ticker)}
-                    disabled={!w.plan || promotingTicker === w.ticker}
-                    className="px-2 py-1 text-[11px] border border-gray-300 text-gray-800 disabled:opacity-50 hover:bg-gray-50"
-                  >
-                    {promotingTicker === w.ticker ? 'Moving...' : 'Move to Actionable'}
-                  </button>
-                </div>
+                <span className="text-gray-700">{w.blockedReason || 'Watch'}</span>
               </div>
-            ))}
-            {watchlist.length === 0 && (
-              <div className="px-4 py-6 text-xs text-gray-500">No watchlist items.</div>
-            )}
-          </div>
+              <div className="text-gray-700 mt-1">{w.plainEnglish || w.why[0]}</div>
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() => promoteTicker(w.ticker)}
+                  disabled={!w.plan || promotingTicker === w.ticker}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-[11px] text-gray-800 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {promotingTicker === w.ticker ? 'Moving...' : 'Move to Actionable'}
+                </button>
+              </div>
+            </div>
+          ))}
+          {watchlist.length === 0 && (
+            <div className="px-4 py-6 text-xs text-gray-500">No watchlist items.</div>
+          )}
         </div>
+        </div>
+      </section>
 
-        <div className="bg-white border border-gray-200 flex flex-col min-h-0">
-          <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 text-sm font-medium text-gray-700">
-            Diagnostics
-          </div>
-          <div className="p-4 text-xs space-y-2 flex-1 min-h-0 overflow-auto">
+      <section className="overflow-hidden rounded-lg border border-gray-300 bg-white shadow-sm">
+        <div className="flex items-center justify-between border-b border-gray-300 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-800">
+          <span>Diagnostics</span>
+          <button
+            type="button"
+            onClick={() => setShowDiagnostics((prev) => !prev)}
+            className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-800 hover:bg-gray-50"
+          >
+            {showDiagnostics ? 'Hide' : 'Show'}
+          </button>
+        </div>
+        {showDiagnostics ? (
+          <div className="p-3 text-xs space-y-2 max-h-52 overflow-auto">
             <div className="text-gray-900 font-medium">Runtime: {diagnostics ? `${diagnostics.runtimeMs} ms` : '-'}</div>
             <div>
               <div className="font-medium text-gray-800 mb-1">Fetch Gaps</div>
@@ -388,7 +708,7 @@ export default function StockIntelligencePage() {
               ) : <div className="text-gray-700">None</div>}
             </div>
           </div>
-        </div>
+        ) : null}
       </section>
     </div>
   );
@@ -396,9 +716,33 @@ export default function StockIntelligencePage() {
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
-    <div className="border border-gray-200 bg-white px-3 py-2">
+    <div className="rounded-md border border-gray-300 bg-white px-3 py-2 shadow-sm">
       <div className="text-[10px] uppercase tracking-wider text-gray-500">{label}</div>
       <div className="font-mono text-lg font-semibold text-gray-900">{value}</div>
+    </div>
+  );
+}
+
+function StatusPill({
+  label,
+  on,
+  onText = 'On',
+  offText = 'Off',
+}: {
+  label: string;
+  on: boolean;
+  onText?: string;
+  offText?: string;
+}) {
+  return (
+    <div
+      className={`rounded-full border px-2.5 py-1 text-[11px] ${
+        on
+          ? 'border-[#d5c6ea] bg-[#efe8fa] text-[#2d1b4e]'
+          : 'border-gray-200 bg-gray-50 text-gray-600'
+      }`}
+    >
+      <span className="font-medium">{label}:</span> {on ? onText : offText}
     </div>
   );
 }
