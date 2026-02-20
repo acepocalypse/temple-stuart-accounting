@@ -1,28 +1,83 @@
-# Strader (Manual Stock Scanner)
+# Strader Hybrid Stock Scanner
 
-This is a stock-only Next.js app for manual swing trading.
+Deterministic long-only stock intelligence engine:
+- Daily swing-bias scan
+- 15-minute intraday trigger checks
+- Human approval workflow
+- No auto-trading
+- No account-size assumptions inside engine
 
-## What It Does
-- Scans a seed universe of liquid U.S. stocks.
-- Builds a daily bias from daily candles.
-- Refreshes 15m triggers for shortlist symbols.
-- Produces deterministic trade cards with:
-  - direction (`LONG`/`SHORT`/`WATCH`)
-  - entry/stop/targets
-  - whole-share position sizing
-  - risk flags and plain-English explanations
+## Scope
+- Universe: liquid U.S. stocks (ETF-excluded) ranked by 20-day dollar volume
+- Daily run: full universe scan (default target 500)
+- Intraday run: refresh only shortlist + tracked open positions
 
-## Data Sources
-- Yahoo chart API: daily and 15m candles
-- Finnhub: fundamentals, analyst recs, insider sentiment, earnings calendar/profile
-- FRED: macro regime inputs
+## Engine Rules
+- Long-only
+- Cash-account compatible output
+- Convergence gate: at least 3 of 4 pillars >= cutoff (default 60)
+- Adaptive threshold:
+  - Strong: `max(70, 85th percentile)`
+  - Neutral: `max(75, 90th percentile)`
+  - Weak: `max(80, 92nd percentile)`
+- Shortlist target: 5-10 (can be 0 on poor days)
 
-## Required Environment Variables
+## Pillars
+- Vol-Edge: trend + volatility structure + compression/expansion readiness
+- Quality: lightweight profitability + balance sheet checks
+- Regime: SPY/VIX/FRED macro with SPY-correlation scaling
+- Info-Edge: sentiment direction + intensity + divergence/flow checks
+
+## Earnings Handling
+- Earnings within 2 trading days: `WATCH_ONLY`
+- Missing earnings date: not hard-blocked
+  - Adds risk note
+  - Applies confidence penalty
+
+## Trade Card Outputs
+Each card includes:
+- Ticker, sector, liquidity rank
+- Regime label
+- Pillar scores + overall score
+- Adaptive threshold + percentile rank
+- Confidence score + bucket
+- Why bullets (factual)
+- Risk warnings
+- Trigger plan (deterministic):
+  - Trigger description + trigger price
+  - Stop description + stop price
+  - Risk per share
+  - ATR(14), distance to 20DMA
+  - 1R / 2R reference levels
+
+No share sizing is computed.
+
+## Data + Reliability
+- Yahoo candles:
+  - Daily TTL: 24h
+  - 15m TTL: 10m
+- Finnhub:
+  - Fundamentals TTL: 7d
+  - Earnings TTL: 24h
+  - News TTL: 3h
+- FRED macro TTL: 24h
+- Throttling + retry/backoff + provider circuit-breaker
+- Missing data degrades gracefully (no fabrication)
+
+## Narration
+- Optional plain-English narration via Gemini
+- Model: `gemini-3-flash-preview` (fallback `gemini-2.5-flash`)
+- Rate limit: 50 requests/minute (in-process guard)
+- Deterministic fallback text if LLM unavailable
+
+## Environment Variables
 Set in `.env.local`:
 
 ```env
 FINNHUB_API_KEY="your-finnhub-key"
 FRED_API_KEY="your-fred-key"
+GEMINI_API_KEY="your-gemini-api-key"
+NEXT_PUBLIC_APP_URL="http://localhost:3000"
 ```
 
 ## Run
@@ -31,17 +86,97 @@ npm install
 npm run dev
 ```
 
-Open:
-- `http://localhost:3000/trading/stocks`
+## API
+- Daily full scan:
+  - `GET /api/stocks/scan?refresh=true`
+- Intraday refresh (shortlist + open positions):
+  - `GET /api/stocks/refresh?refresh=true`
+- Compatibility alias:
+  - `GET /api/stocks/shortlist?refresh=true`
+- Progress:
+  - `GET /api/stocks/scan/status`
+- Approvals:
+  - `GET /api/stocks/approvals`
+  - `POST /api/stocks/approvals`
+- Audit:
+  - `GET /api/stocks/audit?limit=200`
 
-## API Endpoints
-- `GET /api/stocks/scan?refresh=true`
-- `GET /api/stocks/shortlist?refresh=true`
+Useful query overrides:
+- `universeSize`
+- `minDollarVolume`
+- `pillarCutoff`
+- `expand=true|false`
+- `expandBuffer=<points>`
 
-Optional overrides:
-- `accountSize`
-- `riskPct`
-- `maxPositionPct`
-- `maxOpen`
-- `maxPerSector`
+## Tests
+```bash
+npm test
+```
+
+Included test coverage:
+- Adaptive threshold by regime
+- Earnings handling (near-date watch-only, unknown-date penalty/no hard block)
+- No-setup behavior
+- Intraday refresh scope (shortlist/open only)
+- Deterministic trigger plan output (per-share risk)
+
+## Sample Candidate JSON
+```json
+{
+  "ticker": "AAPL",
+  "sector": "Technology",
+  "liquidityRank": 8,
+  "status": "ACTIONABLE",
+  "price": 191.4,
+  "regime": "NEUTRAL",
+  "pillars": {
+    "volEdge": 78.2,
+    "quality": 69.4,
+    "regime": 73.1,
+    "infoEdge": 64.7
+  },
+  "overallScore": 72.96,
+  "adaptiveThreshold": 75.0,
+  "percentileRank": 91.4,
+  "convergence": {
+    "met": true,
+    "pillarsAboveCutoff": 4,
+    "cutoff": 60,
+    "strength": "STRONG"
+  },
+  "confidence": {
+    "score": 81.3,
+    "label": "HIGH"
+  },
+  "why": [
+    "Price is above 20/50/200DMA trend stack.",
+    "Higher-high/higher-low structure remains intact.",
+    "Breakout volume confirmed at 1.82x 20-day average."
+  ],
+  "riskWarnings": [
+    "VIX elevated at 28.1."
+  ],
+  "plan": {
+    "strategy": "BREAK_ABOVE_PRIOR_15M_SWING_HIGH",
+    "triggerDescription": "Breakout above prior 15m swing high with volume confirmation.",
+    "triggerPrice": 192.05,
+    "stopDescription": "Stop below recent 15m swing low.",
+    "stopPrice": 189.88,
+    "status": "ACTIONABLE",
+    "volumeConfirmed": true,
+    "atr14": 3.12,
+    "distanceTo20dmaPct": 1.44,
+    "daily20dma": 189.32,
+    "recent15mSwingHigh": 192.04,
+    "recent15mSwingLow": 189.89,
+    "entryTo20dmaDistancePct": 1.44,
+    "riskPerShare": 2.17,
+    "oneR": 194.22,
+    "twoR": 196.39
+  },
+  "blocked": false,
+  "blockedReason": null,
+  "generatedAt": "2026-02-20T17:14:01.113Z"
+}
+```
 

@@ -6,10 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --import tsx --test src/lib/stock-intelligence/tests/*.test.ts",
+    "stocks:daily": "node --import tsx scripts/stock-jobs.ts daily",
+    "stocks:refresh": "node --import tsx scripts/stock-jobs.ts refresh"
   },
   "dependencies": {
-    "next": "15.5.9",
+    "@google/genai": "^1.42.0",
+    "next": "^15.5.12",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -19,9 +23,10 @@
     "@types/react-dom": "^18",
     "autoprefixer": "^10.4.21",
     "eslint": "^8",
-    "eslint-config-next": "15.5.2",
+    "eslint-config-next": "^15.5.12",
     "postcss": "^8",
     "tailwindcss": "^3.4.18",
+    "tsx": "^4.20.3",
     "typescript": "^5"
   }
 }

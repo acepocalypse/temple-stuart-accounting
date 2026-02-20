@@ -3,24 +3,41 @@
 import { useMemo, useState } from 'react';
 
 type Card = {
-  symbol: string;
+  ticker: string;
   sector: string | null;
-  direction: 'LONG' | 'SHORT' | 'WATCH';
-  setupType: string;
-  score: number;
-  dailyBiasScore: number;
-  triggerScore: number;
-  plan: {
-    entry: number | null;
-    stop: number | null;
-    target1: number | null;
-    target2: number | null;
-    shares: number;
-    notional: number;
-    riskRewardToT1: number | null;
+  liquidityRank: number;
+  status: 'ACTIONABLE' | 'WATCH_ONLY';
+  blocked: boolean;
+  blockedReason: string | null;
+  overallScore: number;
+  confidence: {
+    score: number;
+    label: string;
   };
-  explanations: string[];
-  riskFlags: string[];
+  convergence: {
+    met: boolean;
+    strength: string;
+  };
+  plainEnglish: string | null;
+  plan: {
+    triggerDescription: string;
+    triggerPrice: number;
+    stopDescription: string;
+    stopPrice: number;
+    status: 'ACTIONABLE' | 'WATCH_ONLY';
+    volumeConfirmed: boolean;
+    atr14: number | null;
+    distanceTo20dmaPct: number | null;
+    daily20dma: number | null;
+    recent15mSwingHigh: number | null;
+    recent15mSwingLow: number | null;
+    entryTo20dmaDistancePct: number | null;
+    riskPerShare: number;
+    oneR: number | null;
+    twoR: number | null;
+  } | null;
+  why: string[];
+  riskWarnings: string[];
 };
 
 type ScanResponse = {
@@ -35,6 +52,17 @@ type ScanResponse = {
   };
 };
 
+type ProgressResponse = {
+  running: boolean;
+  phase: string;
+  completed: number;
+  total: number;
+  startedAt: string | null;
+  updatedAt: string;
+  message: string;
+  percent: number;
+};
+
 const fmt = (n: number | null | undefined) => (n == null ? '-' : n.toFixed(2));
 
 export default function StockIntelligencePage() {
@@ -42,6 +70,7 @@ export default function StockIntelligencePage() {
   const [loadingShortlist, setLoadingShortlist] = useState(false);
   const [scan, setScan] = useState<ScanResponse | null>(null);
   const [shortlist, setShortlist] = useState<ScanResponse | null>(null);
+  const [scanProgress, setScanProgress] = useState<ProgressResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const cards = useMemo(() => shortlist?.cards || scan?.cards || [], [scan, shortlist]);
@@ -52,15 +81,67 @@ export default function StockIntelligencePage() {
   async function runDailyScan() {
     setError(null);
     setLoadingScan(true);
+    setScanProgress({
+      running: true,
+      phase: 'loading_daily_candles',
+      completed: 0,
+      total: 1,
+      startedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      message: 'Starting daily scan',
+      percent: 1,
+    });
+    let intervalId: ReturnType<typeof setInterval> | null = null;
     try {
+      intervalId = setInterval(async () => {
+        try {
+          const res = await fetch('/api/stocks/scan/status');
+          if (!res.ok) return;
+          const data = (await res.json()) as ProgressResponse;
+          setScanProgress((prev) => {
+            if (!prev) return data;
+            // Fallback when backend status endpoint is still cold/idle.
+            if (
+              data.phase === 'idle' &&
+              prev.running &&
+              prev.phase !== 'complete' &&
+              prev.phase !== 'error'
+            ) {
+              const nextPct = Math.min(95, Math.max(prev.percent + 2, 5));
+              return {
+                ...prev,
+                percent: nextPct,
+                updatedAt: new Date().toISOString(),
+                message: 'Scan is running; awaiting first server progress update...',
+              };
+            }
+            return data;
+          });
+        } catch {
+          // silent
+        }
+      }, 1200);
+
       const res = await fetch('/api/stocks/scan?refresh=true');
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setScan(data);
       setShortlist(null);
+      setScanProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              running: false,
+              phase: 'complete',
+              percent: 100,
+              message: 'Daily scan complete',
+            }
+          : null,
+      );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      if (intervalId) clearInterval(intervalId);
       setLoadingScan(false);
     }
   }
@@ -69,7 +150,7 @@ export default function StockIntelligencePage() {
     setError(null);
     setLoadingShortlist(true);
     try {
-      const res = await fetch('/api/stocks/shortlist?refresh=true');
+      const res = await fetch('/api/stocks/refresh?refresh=true');
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
       setShortlist(data);
@@ -81,7 +162,7 @@ export default function StockIntelligencePage() {
   }
 
   return (
-    <div className="p-6 max-w-[1400px] mx-auto space-y-4">
+    <div className="p-6 max-w-[1400px] mx-auto space-y-4 min-h-screen flex flex-col">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Manual Stock Intelligence</h1>
@@ -116,12 +197,32 @@ export default function StockIntelligencePage() {
       {summary && (
         <div className="grid grid-cols-2 lg:grid-cols-7 gap-2">
           <Stat label="Scanner Symbols" value={Number(summary.scannerSymbols || 0)} />
-          <Stat label="Universe" value={Number(summary.finalUniverse || 0)} />
-          <Stat label="Scored" value={Number(summary.scoredWithConvergence || 0)} />
-          <Stat label="15m Evaluated" value={Number(summary.intradayEvaluated || summary.refreshedSymbols || 0)} />
-          <Stat label="Open Positions" value={Number(summary.openPositions || 0)} />
-          <Stat label="Slots Available" value={Number(summary.availableSlots || 0)} />
-          <Stat label="Selected Cards" value={Number(summary.selectedCards || 0)} />
+          <Stat label="Filtered" value={Number(summary.filteredByPriceLiquidity || 0)} />
+          <Stat label="Scored" value={Number(summary.scoredUniverse || 0)} />
+          <Stat label="Refreshed" value={Number(summary.refreshedSymbols || 0)} />
+          <Stat label="Shortlisted" value={Number(summary.shortlisted || 0)} />
+          <Stat label="Returned" value={Number(summary.returnedCards || 0)} />
+          <Stat label="No Setups" value={summary.noSetups ? 1 : 0} />
+        </div>
+      )}
+
+      {loadingScan && scanProgress && (
+        <div className="border border-gray-200 bg-white px-3 py-2 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-gray-800">
+              Daily scan: {scanProgress.phase.replaceAll('_', ' ')}
+            </span>
+            <span className="font-mono text-gray-800">
+              {scanProgress.completed}/{scanProgress.total} ({scanProgress.percent}%)
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
+            <div
+              className="h-full bg-gray-900 transition-all duration-500 ease-out"
+              style={{ width: `${Math.max(2, Math.min(100, scanProgress.percent))}%` }}
+            />
+          </div>
+          <div className="mt-1 text-gray-700">{scanProgress.message}</div>
         </div>
       )}
 
@@ -134,32 +235,32 @@ export default function StockIntelligencePage() {
             <thead className="bg-[#2d1b4e] text-white">
               <tr>
                 <th className="text-left px-3 py-2">Symbol</th>
-                <th className="text-left px-3 py-2">Dir</th>
-                <th className="text-left px-3 py-2">Setup</th>
-                <th className="text-right px-3 py-2">Comp</th>
-                <th className="text-right px-3 py-2">Daily</th>
-                <th className="text-right px-3 py-2">15m</th>
-                <th className="text-right px-3 py-2">Entry</th>
+                <th className="text-left px-3 py-2">Status</th>
+                <th className="text-right px-3 py-2">Liq Rank</th>
+                <th className="text-left px-3 py-2">Conf</th>
+                <th className="text-right px-3 py-2">Score</th>
+                <th className="text-right px-3 py-2">Conv</th>
+                <th className="text-right px-3 py-2">Trigger</th>
                 <th className="text-right px-3 py-2">Stop</th>
-                <th className="text-right px-3 py-2">T1</th>
-                <th className="text-right px-3 py-2">Shares</th>
-                <th className="text-right px-3 py-2">Notional</th>
+                <th className="text-right px-3 py-2">Risk/Share</th>
+                <th className="text-right px-3 py-2">1R</th>
+                <th className="text-right px-3 py-2">2R</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {cards.map((card) => (
-                <tr key={card.symbol}>
-                  <td className="px-3 py-2 font-mono font-semibold">{card.symbol}</td>
-                  <td className="px-3 py-2">{card.direction}</td>
-                  <td className="px-3 py-2">{card.setupType}</td>
-                  <td className="px-3 py-2 text-right font-mono">{fmt(card.score)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{fmt(card.dailyBiasScore)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{fmt(card.triggerScore)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan.entry)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan.stop)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan.target1)}</td>
-                  <td className="px-3 py-2 text-right font-mono">{card.plan.shares}</td>
-                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan.notional)}</td>
+                <tr key={card.ticker}>
+                  <td className="px-3 py-2 font-mono font-semibold">{card.ticker}</td>
+                  <td className="px-3 py-2">{card.status}</td>
+                  <td className="px-3 py-2 text-right font-mono">{card.liquidityRank}</td>
+                  <td className="px-3 py-2">{card.confidence.label}</td>
+                  <td className="px-3 py-2 text-right font-mono">{fmt(card.overallScore)}</td>
+                  <td className="px-3 py-2 text-right font-mono">{card.convergence.strength}</td>
+                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan?.triggerPrice)}</td>
+                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan?.stopPrice)}</td>
+                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan?.riskPerShare)}</td>
+                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan?.oneR)}</td>
+                  <td className="px-3 py-2 text-right font-mono">{fmt(card.plan?.twoR)}</td>
                 </tr>
               ))}
               {cards.length === 0 && (
@@ -174,19 +275,19 @@ export default function StockIntelligencePage() {
         </div>
       </section>
 
-      <section className="grid lg:grid-cols-2 gap-4">
-        <div className="bg-white border border-gray-200">
+      <section className="grid lg:grid-cols-2 gap-4 flex-1 min-h-0">
+        <div className="bg-white border border-gray-200 flex flex-col min-h-0">
           <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 text-sm font-medium text-gray-700">
             Watchlist ({watchlist.length})
           </div>
-          <div className="max-h-96 overflow-auto">
+          <div className="flex-1 min-h-0 overflow-auto">
             {watchlist.map((w) => (
-              <div key={w.symbol} className="px-4 py-2 border-b border-gray-100 text-xs">
+              <div key={w.ticker} className="px-4 py-2 border-b border-gray-100 text-xs">
                 <div className="flex justify-between">
-                  <span className="font-mono font-semibold">{w.symbol}</span>
-                  <span className="text-gray-500">{w.direction} / {w.setupType}</span>
+                  <span className="font-mono font-semibold text-gray-900">{w.ticker}</span>
+                  <span className="text-gray-700">{w.blockedReason || 'Watch'}</span>
                 </div>
-                <div className="text-gray-600 mt-1">{w.explanations[0]}</div>
+                <div className="text-gray-700 mt-1">{w.plainEnglish || w.why[0]}</div>
               </div>
             ))}
             {watchlist.length === 0 && (
@@ -195,27 +296,27 @@ export default function StockIntelligencePage() {
           </div>
         </div>
 
-        <div className="bg-white border border-gray-200">
+        <div className="bg-white border border-gray-200 flex flex-col min-h-0">
           <div className="px-4 py-2 border-b border-gray-200 bg-gray-50 text-sm font-medium text-gray-700">
             Diagnostics
           </div>
-          <div className="p-4 text-xs space-y-2">
-            <div>Runtime: {diagnostics ? `${diagnostics.runtimeMs} ms` : '-'}</div>
+          <div className="p-4 text-xs space-y-2 flex-1 min-h-0 overflow-auto">
+            <div className="text-gray-900 font-medium">Runtime: {diagnostics ? `${diagnostics.runtimeMs} ms` : '-'}</div>
             <div>
-              <div className="font-medium text-gray-700 mb-1">Fetch Gaps</div>
+              <div className="font-medium text-gray-800 mb-1">Fetch Gaps</div>
               {(diagnostics?.fetchGaps || []).length > 0 ? (
-                <ul className="list-disc pl-4 space-y-1 text-gray-600">
+                <ul className="list-disc pl-4 space-y-1 text-gray-700">
                   {(diagnostics?.fetchGaps || []).map((g, i) => <li key={i}>{g}</li>)}
                 </ul>
-              ) : <div className="text-gray-500">None</div>}
+              ) : <div className="text-gray-700">None</div>}
             </div>
             <div>
-              <div className="font-medium text-gray-700 mb-1">Errors</div>
+              <div className="font-medium text-gray-800 mb-1">Errors</div>
               {(diagnostics?.errors || []).length > 0 ? (
                 <ul className="list-disc pl-4 space-y-1 text-red-700">
                   {(diagnostics?.errors || []).map((g, i) => <li key={i}>{g}</li>)}
                 </ul>
-              ) : <div className="text-gray-500">None</div>}
+              ) : <div className="text-gray-700">None</div>}
             </div>
           </div>
         </div>
