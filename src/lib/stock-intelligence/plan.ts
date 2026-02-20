@@ -45,7 +45,9 @@ export function buildTriggerPlan(args: {
   dailyCandles: Candle[];
   allowEntry: boolean;
   watchReason: string | null;
+  mode?: 'DAILY' | 'INTRADAY';
 }): TradePlan | null {
+  const mode = args.mode || 'INTRADAY';
   const trigger = prior15mSwingHigh(args.intraday15m);
   const swingLow15m = recentSwingLow(args.intraday15m);
   const swingHigh15m = recentSwingHigh(args.intraday15m);
@@ -70,7 +72,10 @@ export function buildTriggerPlan(args: {
     lastBar.volume > prevBar.volume &&
     (avgVol20 === null ? true : lastBar.volume >= avgVol20);
   const aboveDaily20 = dailySma20 === null ? true : triggerPrice > dailySma20;
-  const actionable = args.allowEntry && volumeConfirmed && aboveDaily20;
+  const actionable =
+    mode === 'INTRADAY'
+      ? args.allowEntry && volumeConfirmed && aboveDaily20
+      : args.allowEntry && aboveDaily20;
 
   const oneR = round(triggerPrice + riskPerShare, 2);
   const twoR = round(triggerPrice + riskPerShare * 2, 2);
@@ -86,7 +91,9 @@ export function buildTriggerPlan(args: {
   return {
     strategy: 'BREAK_ABOVE_PRIOR_15M_SWING_HIGH',
     triggerDescription: actionable
-      ? 'Breakout above prior 15m swing high with volume confirmation.'
+      ? mode === 'INTRADAY'
+        ? 'Breakout above prior 15m swing high with volume confirmation.'
+        : 'Planned trigger for next session: break above prior 15m swing high and confirm volume live.'
       : args.watchReason || 'Trigger present but confirmation conditions are not fully met.',
     triggerPrice,
     stopDescription,
@@ -117,4 +124,3 @@ export function gapRiskProxy(dailyCandles: Candle[]): number {
   }
   return round((gapDays / 29) * 100, 2);
 }
-

@@ -13,3 +13,9 @@ test('adaptive threshold is strictest in WEAK regime', () => {
   assert.equal(weak.floor, 80);
   assert.equal(strong.floor, 70);
 });
+
+test('adaptive threshold is capped below top score', () => {
+  const lowScores = [32, 38, 41, 44];
+  const weak = computeAdaptiveThreshold(lowScores, 'WEAK');
+  assert.equal(weak.threshold, 43);
+});

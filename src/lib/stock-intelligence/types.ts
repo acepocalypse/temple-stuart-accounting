@@ -186,10 +186,24 @@ export interface DailyScanSummary {
   noSetups: boolean;
 }
 
+export interface ScanDebug {
+  regime_label: MarketRegime;
+  adaptive_threshold: number;
+  universe_count: number;
+  valid_daily_count: number;
+  valid_15m_count: number;
+  blocked_earnings_count: number;
+  earnings_unknown_count: number;
+  convergence_pass_count: number;
+  threshold_pass_count: number;
+  top10_scores: number[];
+}
+
 export interface DailyScanResult {
   generatedAt: string;
   regime: MacroSnapshot;
   summary: DailyScanSummary;
+  scan_debug: ScanDebug;
   cards: TradeCard[];
   watchlist: TradeCard[];
   diagnostics: ScanDiagnostics;

@@ -9,7 +9,10 @@ export function computeAdaptiveThreshold(
   const sorted = [...scores].sort((a, b) => a - b);
   const settings = thresholdSettingsByRegime(regime);
   const p = percentile(sorted, settings.percentile);
-  const adaptive = Math.max(settings.floor, p);
+  const uncapped = Math.max(settings.floor, p);
+  const topScore = sorted[sorted.length - 1] ?? 0;
+  const cap = Math.max(0, topScore - 1);
+  const adaptive = Math.min(uncapped, cap);
   return {
     threshold: adaptive,
     percentileTarget: settings.percentile,
@@ -18,4 +21,3 @@ export function computeAdaptiveThreshold(
     std: stdDev(scores),
   };
 }
-

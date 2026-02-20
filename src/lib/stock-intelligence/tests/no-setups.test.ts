@@ -78,4 +78,7 @@ test('no setups condition returns empty shortlist with reason', async () => {
   assert.equal(result.summary.noSetups, true);
   assert.equal(result.cards.length, 0);
   assert.ok(result.diagnostics.fetchGaps.includes('No high-quality setups today.'));
+  assert.equal(result.scan_debug.universe_count, 3);
+  assert.equal(result.scan_debug.valid_daily_count, 0);
+  assert.equal(result.scan_debug.valid_15m_count, 0);
 });

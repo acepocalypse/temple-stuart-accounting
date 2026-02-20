@@ -19,6 +19,7 @@ import type {
   MacroSnapshot,
   PillarScores,
   RefreshResult,
+  ScanDebug,
   StockFeatures,
   TradeCard,
 } from './types';
@@ -40,6 +41,11 @@ type DailyFeatureRow = {
   preScore: number;
   preFeatures: StockFeatures;
   liquidityRank: number;
+};
+
+type DailyFeatureBuildStats = {
+  validDailyCount: number;
+  liquidityPassCount: number;
 };
 
 type EvaluatedRow = {
@@ -128,7 +134,12 @@ function pickWarnings(features: StockFeatures, macro: MacroSnapshot, dailyCandle
   return warnings;
 }
 
-function noSetupResult(startMs: number, macro: MacroSnapshot, scanned: number): DailyScanResult {
+function noSetupResult(
+  startMs: number,
+  macro: MacroSnapshot,
+  scanned: number,
+  scanDebugOverrides?: Partial<ScanDebug>,
+): DailyScanResult {
   return {
     generatedAt: nowIso(),
     regime: macro,
@@ -140,6 +151,19 @@ function noSetupResult(startMs: number, macro: MacroSnapshot, scanned: number): 
       shortlisted: 0,
       returnedCards: 0,
       noSetups: true,
+    },
+    scan_debug: {
+      regime_label: macro.regime,
+      adaptive_threshold: 0,
+      universe_count: scanned,
+      valid_daily_count: 0,
+      valid_15m_count: 0,
+      blocked_earnings_count: 0,
+      earnings_unknown_count: 0,
+      convergence_pass_count: 0,
+      threshold_pass_count: 0,
+      top10_scores: [],
+      ...(scanDebugOverrides || {}),
     },
     cards: [],
     watchlist: [],
@@ -157,11 +181,17 @@ async function buildDailyFeatureRows(
   config: EngineConfig,
   deps: EngineDeps,
   onTick?: (completed: number, total: number) => void,
-): Promise<{ rows: DailyFeatureRow[]; spyCandles: Candle[]; errors: string[] }> {
+): Promise<{
+  rows: DailyFeatureRow[];
+  spyCandles: Candle[];
+  errors: string[];
+  stats: DailyFeatureBuildStats;
+}> {
   const errors: string[] = [];
   const spy = await deps.fetchDailyCandles('SPY', '1y', '1d');
   const spyCandles = spy.candles;
   const rows: Omit<DailyFeatureRow, 'liquidityRank'>[] = [];
+  let validDailyCount = 0;
 
   for (let i = 0; i < tickers.length; i++) {
     const ticker = tickers[i];
@@ -200,7 +230,10 @@ async function buildDailyFeatureRows(
       },
     });
     if (!base || base.price <= 0) continue;
-    if (base.dollarVolume20d < config.minDollarVolume20d) continue;
+    validDailyCount += 1;
+    const hasValidDollarVolume =
+      Number.isFinite(base.dollarVolume20d) && base.dollarVolume20d > 0;
+    if (hasValidDollarVolume && base.dollarVolume20d < config.minDollarVolume20d) continue;
 
     const preMacro: MacroSnapshot = {
       regime: 'NEUTRAL',
@@ -215,7 +248,7 @@ async function buildDailyFeatureRows(
     rows.push({
       ticker,
       dailyCandles: daily.candles,
-      dollarVolume20d: base.dollarVolume20d,
+      dollarVolume20d: hasValidDollarVolume ? base.dollarVolume20d : 0,
       preScore,
       preFeatures: base,
     });
@@ -223,7 +256,42 @@ async function buildDailyFeatureRows(
 
   rows.sort((a, b) => b.dollarVolume20d - a.dollarVolume20d);
   const ranked: DailyFeatureRow[] = rows.map((r, idx) => ({ ...r, liquidityRank: idx + 1 }));
-  return { rows: ranked, spyCandles, errors };
+  return {
+    rows: ranked,
+    spyCandles,
+    errors,
+    stats: {
+      validDailyCount,
+      liquidityPassCount: ranked.length,
+    },
+  };
+}
+
+function buildScanDebug(args: {
+  macro: MacroSnapshot;
+  threshold: number;
+  universeCount: number;
+  validDailyCount: number;
+  valid15mCount: number;
+  evaluatedRows: EvaluatedRow[];
+  cards: TradeCard[];
+}): ScanDebug {
+  return {
+    regime_label: args.macro.regime,
+    adaptive_threshold: round(args.threshold, 2),
+    universe_count: args.universeCount,
+    valid_daily_count: args.validDailyCount,
+    valid_15m_count: args.valid15mCount,
+    blocked_earnings_count: args.evaluatedRows.filter((r) => r.features.earnings.inBlackoutWindow).length,
+    earnings_unknown_count: args.evaluatedRows.filter((r) => r.features.earnings.isUnknown).length,
+    convergence_pass_count: args.cards.filter((c) => c.convergence.met).length,
+    threshold_pass_count: args.evaluatedRows.filter((r) => r.overall >= args.threshold).length,
+    top10_scores: [...args.evaluatedRows]
+      .map((r) => r.overall)
+      .sort((a, b) => b - a)
+      .slice(0, 10)
+      .map((n) => round(n, 2)),
+  };
 }
 
 async function narrateCards(cards: TradeCard[], providerFailures: string[]): Promise<TradeCard[]> {
@@ -248,17 +316,21 @@ function makeCard(args: {
   const convergenceMet = pillarsAbove >= 3;
   const convergenceStrength =
     pillarsAbove >= 4 ? 'STRONG' : pillarsAbove >= 3 ? 'PASS' : 'FAIL';
+  const thresholdMet = row.overall >= threshold;
 
   const watchReason = row.features.earnings.inBlackoutWindow
     ? 'Earnings window too close'
     : !convergenceMet
       ? 'Convergence gate failed'
+      : !thresholdMet
+        ? 'Below adaptive threshold'
       : null;
   const plan = buildTriggerPlan({
     intraday15m: row.intradayCandles,
     dailyCandles: row.dailyCandles,
-    allowEntry: convergenceMet && !row.features.earnings.inBlackoutWindow,
+    allowEntry: convergenceMet && !row.features.earnings.inBlackoutWindow && thresholdMet,
     watchReason,
+    mode: 'DAILY',
   });
 
   const sentimentBonus =
@@ -281,10 +353,7 @@ function makeCard(args: {
   const adjustedConfidence = Math.max(0, baseConfidence.score - confidencePenalty);
 
   const warnings = pickWarnings(row.features, macro, row.dailyCandles);
-  const status: TradeCard['status'] =
-    plan && plan.status === 'ACTIONABLE' && row.overall >= threshold
-      ? 'ACTIONABLE'
-      : 'WATCH_ONLY';
+  const status: TradeCard['status'] = plan && plan.status === 'ACTIONABLE' ? 'ACTIONABLE' : 'WATCH_ONLY';
 
   return {
     ticker: row.ticker,
@@ -319,7 +388,10 @@ function makeCard(args: {
     riskWarnings: warnings,
     plan,
     blocked: status === 'WATCH_ONLY',
-    blockedReason: status === 'WATCH_ONLY' ? watchReason || 'Trigger not confirmed' : null,
+    blockedReason:
+      status === 'WATCH_ONLY'
+        ? watchReason || (!plan ? 'Trigger plan unavailable (15m data missing)' : 'Trigger not confirmed')
+        : null,
     freshness: row.freshness,
     generatedAt: nowIso(),
   };
@@ -372,7 +444,7 @@ export async function runDailyScan(
   });
 
   const tickers = getSeedUniverse(config.universeTargetSize);
-  const { rows, spyCandles, errors } = await buildDailyFeatureRows(
+  const { rows, spyCandles, errors, stats } = await buildDailyFeatureRows(
     tickers,
     config,
     deps,
@@ -396,7 +468,10 @@ export async function runDailyScan(
       inflationTrendDown: null,
       unemploymentTrendDown: null,
     };
-    return noSetupResult(startMs, macro, tickers.length);
+    return noSetupResult(startMs, macro, tickers.length, {
+      valid_daily_count: stats.validDailyCount,
+      valid_15m_count: 0,
+    });
   }
 
   const spyClose = spyCandles[spyCandles.length - 1]?.close ?? 0;
@@ -420,6 +495,7 @@ export async function runDailyScan(
 
   const providerFailures: string[] = [];
   const evaluated: EvaluatedRow[] = [];
+  let valid15mCount = 0;
   for (let i = 0; i < stage1.length; i++) {
     const row = stage1[i];
     const [fundamentals, earnings, news, intraday] = await Promise.all([
@@ -436,9 +512,11 @@ export async function runDailyScan(
       message: `Enriched ${i + 1}/${stage1.length}`,
     });
 
-    if (intraday.error || intraday.candles.length < 20) {
+    const intradayValid = !intraday.error && intraday.candles.length >= 20;
+    if (!intradayValid) {
       providerFailures.push(`${row.ticker} intraday unavailable`);
-      continue;
+    } else {
+      valid15mCount += 1;
     }
     if (fundamentals.error) providerFailures.push(`${row.ticker} fundamentals: ${fundamentals.error}`);
     if (earnings.error) providerFailures.push(`${row.ticker} earnings: ${earnings.error}`);
@@ -459,13 +537,13 @@ export async function runDailyScan(
       ticker: row.ticker,
       liquidityRank: row.liquidityRank,
       dailyCandles: row.dailyCandles,
-      intradayCandles: intraday.candles,
+      intradayCandles: intradayValid ? intraday.candles : [],
       features,
       pillars,
       overall,
       freshness: {
         daily: nowIso(),
-        intraday15m: nowIso(),
+        intraday15m: intradayValid ? nowIso() : null,
         fundamentals: fundamentals.freshness,
         earnings: earnings.freshness,
         macro: macroResp.freshness,
@@ -475,7 +553,10 @@ export async function runDailyScan(
   }
 
   if (evaluated.length === 0) {
-    return noSetupResult(startMs, macro, tickers.length);
+    return noSetupResult(startMs, macro, tickers.length, {
+      valid_daily_count: stats.validDailyCount,
+      valid_15m_count: valid15mCount,
+    });
   }
 
   const scores = evaluated.map((e) => e.overall);
@@ -490,6 +571,15 @@ export async function runDailyScan(
       config,
     }),
   );
+  const scanDebug = buildScanDebug({
+    macro,
+    threshold: adaptive.threshold,
+    universeCount: tickers.length,
+    validDailyCount: stats.validDailyCount,
+    valid15mCount,
+    evaluatedRows: evaluated,
+    cards,
+  });
 
   const pool = adaptivePool(cards, adaptive.threshold, config);
   if (pool.length === 0) {
@@ -498,13 +588,14 @@ export async function runDailyScan(
       regime: macro,
       summary: {
         scannerSymbols: tickers.length,
-        filteredByPriceLiquidity: rows.length,
+        filteredByPriceLiquidity: stats.liquidityPassCount,
         scoredUniverse: evaluated.length,
         threshold: round(adaptive.threshold, 2),
         shortlisted: 0,
         returnedCards: 0,
         noSetups: true,
       },
+      scan_debug: scanDebug,
       cards: [],
       watchlist: [],
       diagnostics: {
@@ -546,13 +637,14 @@ export async function runDailyScan(
     regime: macro,
     summary: {
       scannerSymbols: tickers.length,
-      filteredByPriceLiquidity: rows.length,
+      filteredByPriceLiquidity: stats.liquidityPassCount,
       scoredUniverse: evaluated.length,
       threshold: round(adaptive.threshold, 2),
       shortlisted: pool.length,
       returnedCards: narratedCards.length,
       noSetups: narratedCards.length === 0,
     },
+    scan_debug: scanDebug,
     cards: narratedCards.slice(0, config.shortlistTargetMax),
     watchlist: narratedWatch,
     diagnostics: {
