@@ -1,0 +1,26 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env.local
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: npm run stocks:scheduler
+    env_file:
+      - .env.local
+    volumes:
+      - scheduler-data:/data
+    restart: unless-stopped
+    depends_on:
+      - app
+
+volumes:
+  scheduler-data:

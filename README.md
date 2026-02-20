@@ -78,6 +78,21 @@ FINNHUB_API_KEY="your-finnhub-key"
 FRED_API_KEY="your-fred-key"
 GEMINI_API_KEY="your-gemini-api-key"
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
+
+# Scheduler (optional)
+SCHEDULER_ENABLED="true"
+SCHEDULER_TIMEZONE="America/New_York"
+SCHEDULER_WINDOW_START_ET="04:00"
+SCHEDULER_WINDOW_END_ET="16:00"
+SCHEDULER_DAILY_SCAN_TIME_ET="09:20"
+SCHEDULER_REFRESH_MINUTES="15"
+SCHEDULER_FALLBACK_RESCAN_MINUTES="60"
+SCHEDULER_FALLBACK_POOL_MIN="5"
+SCHEDULER_STATE_PATH="/data/scheduler-state.json"
+
+# Telegram (optional, for phone alerts)
+TELEGRAM_BOT_TOKEN="your-telegram-bot-token"
+TELEGRAM_CHAT_ID="your-telegram-chat-id"
 ```
 
 ## Run
@@ -85,6 +100,32 @@ NEXT_PUBLIC_APP_URL="http://localhost:3000"
 npm install
 npm run dev
 ```
+
+Scheduler (always-on worker):
+```bash
+npm run stocks:scheduler
+```
+
+Scheduler behavior:
+- Runs daily scan once per market day at `SCHEDULER_DAILY_SCAN_TIME_ET`
+- Runs refresh every `SCHEDULER_REFRESH_MINUTES` during premarket/RTH window
+- Sends Telegram alert when actionable set changes
+- Enters fallback mode when `returnedCards == 0` and `shortlisted < SCHEDULER_FALLBACK_POOL_MIN`
+- Runs fallback mini rescan every `SCHEDULER_FALLBACK_RESCAN_MINUTES` while fallback remains active
+
+## Docker
+Example with separate app + scheduler services:
+
+```bash
+docker compose up --build
+```
+
+This repo includes:
+- `Dockerfile`
+- `docker-compose.yml` with:
+  - `app` service (`npm run dev`)
+  - `scheduler` service (`npm run stocks:scheduler`)
+  - persistent `scheduler-data` volume mounted at `/data`
 
 ## API
 - Daily full scan:
@@ -179,4 +220,3 @@ Included test coverage:
   "generatedAt": "2026-02-20T17:14:01.113Z"
 }
 ```
-

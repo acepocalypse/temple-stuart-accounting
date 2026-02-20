@@ -1,4 +1,4 @@
-import { runDailyJob, runRefreshJob } from '../src/lib/stock-intelligence/scheduler';
+import { runDailyJob, runRefreshJob, runSchedulerJob } from '../src/lib/stock-intelligence/scheduler';
 
 async function main() {
   const mode = process.argv[2];
@@ -12,7 +12,12 @@ async function main() {
     console.log('refresh job completed');
     return;
   }
-  throw new Error('Usage: node --import tsx scripts/stock-jobs.ts <daily|refresh>');
+  if (mode === 'scheduler') {
+    console.log('starting scheduler worker');
+    await runSchedulerJob();
+    return;
+  }
+  throw new Error('Usage: node --import tsx scripts/stock-jobs.ts <daily|refresh|scheduler>');
 }
 
 main().catch((error) => {

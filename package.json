@@ -9,7 +9,8 @@
     "lint": "next lint",
     "test": "node --import tsx --test src/lib/stock-intelligence/tests/*.test.ts",
     "stocks:daily": "node --import tsx scripts/stock-jobs.ts daily",
-    "stocks:refresh": "node --import tsx scripts/stock-jobs.ts refresh"
+    "stocks:refresh": "node --import tsx scripts/stock-jobs.ts refresh",
+    "stocks:scheduler": "node --import tsx scripts/stock-scheduler.ts"
   },
   "dependencies": {
     "@google/genai": "^1.42.0",
